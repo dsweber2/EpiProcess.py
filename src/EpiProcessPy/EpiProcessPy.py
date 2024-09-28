@@ -53,4 +53,32 @@ class EpiArchiveAccessor:
         if not set(obj.columns) >= {"geo_value", "time_value", "version"}:
             raise AttributeError("Must have 'geo_value', 'time_value', and 'version'.")
 
-    def slide(self): ...
+    def as_epi_arch(
+            self,
+            extra_keys: union[tuple, list] = ()
+    ):
+        obj = self._obj
+        # default set the as_of to the max value
+        if as_of is None:
+            as_of = self._obj.time_value.max()
+        elif not isinstance(as_of, pd.Timestamp):
+            pass
+        key_names = ["version", "geo_value",  *extra_keys, "time_value"]
+        if self._obj.index.names != key_names:
+            if obj.index.names == [None]:
+                drop_index = True
+            else:
+                drop_index = False
+            obj = obj.reset_index(drop = drop_index).set_index(key_names)
+        obj.attrs["as_of"] = as_of
+
+        return obj
+
+    def group(self):
+        """group by all indices except time."""
+        names_without_time = list(self._obj.index.names)
+        names_without_time.remove('time_value')
+        return self._obj.groupby(names_without_time)
+
+    def slide(self):
+        ...
