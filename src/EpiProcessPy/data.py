@@ -1,9 +1,8 @@
 from functools import reduce
 from pathlib import Path
 
-from epidatpy import EpiDataContext, EpiRange
 import pandas as pd
-
+from epidatpy import EpiDataContext, EpiRange
 
 if not Path("dv_subset.parquet").exists():
     dv_subset = (
@@ -67,14 +66,10 @@ if not Path("incidence_num_outlier_example.parquet").exists():
         .rename(columns={"issue": "version", "value": "cases"})
         .loc[:, ["geo_value", "time_value", "cases"]]
     )
-    incidence_num_outlier_example.to_parquet(
-        "data/incidence_num_outlier_example.parquet"
-    )
+    incidence_num_outlier_example.to_parquet("data/incidence_num_outlier_example.parquet")
     # TODO: as epi_df
 else:
-    incidence_num_outlier_example = pd.read_parquet(
-        "incidence_num_outlier_example.parquet"
-    )
+    incidence_num_outlier_example = pd.read_parquet("incidence_num_outlier_example.parquet")
 
 if not Path("jhu_csse_daily_subset.parquet").exists():
     confirmed_incidence_num = (

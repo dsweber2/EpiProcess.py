@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A Python port of epiprocess"
 readme = "README.rst"
 authors = [{ name = "David Weber", email = "dsweber2@pm.me" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 maintainers = [{ name = "David Weber", email = "dsweber2@pm.me" }]
 classifiers = []
 license = { text = "MIT license" }
@@ -16,7 +16,6 @@ dependencies = [
   "pandas[parquet]",
   "epiweeks",
   "epidatpy @ git+https://github.com/cmu-delphi/epidatpy.git#egg=epidatpy",
-  "ipykernel>=6.29.5",
 ]
 
 [project.optional-dependencies]
