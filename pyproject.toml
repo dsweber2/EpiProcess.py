@@ -36,6 +36,15 @@ package-dir = { "" = "src" }
 [tool.setuptools.package-data]
 "*" = ["*.*"]
 
+[tool.ruff]
+line-length = 120
+format.docstring-code-format = true
+format.docstring-code-line-length = "dynamic"
+lint.extend-select = [
+  "I",  # isort
+  "UP", # pyupgrade
+]
+
 
 # Mypy
 # ----

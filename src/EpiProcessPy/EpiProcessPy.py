@@ -29,4 +29,3 @@ class EpiArchiveAccessor:
 
     def slide(self):
         ...
-
