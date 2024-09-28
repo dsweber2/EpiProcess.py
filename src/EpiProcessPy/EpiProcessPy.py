@@ -15,10 +15,11 @@ class EpiSnapAccessor:
 
     def as_epi_snap(
             self,
-            as_of=None,
-            extra_keys = []
+            as_of: pd.Timestamp | None = None,
+            extra_keys: tuple | list = ()
     ):
         obj = self._obj
+        # default set the as_of to the max value
         if as_of is None:
             as_of = self._obj.time_value.max()
         elif not isinstance(as_of, pd.Timestamp):
