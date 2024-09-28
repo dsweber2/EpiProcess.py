@@ -5,7 +5,7 @@
 import pytest
 import pandas as pd
 
-from EpiProcessPy import EpiProcessPy
+import EpiProcessPy
 
 
 @pytest.fixture
@@ -14,7 +14,6 @@ def response():
 
     See more at: http://doc.pytest.org/en/latest/fixture.html
     """
-
 
 
 def test_content(response):
