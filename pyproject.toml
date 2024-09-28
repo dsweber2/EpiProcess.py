@@ -7,26 +7,19 @@ name = "EpiProcessPy"
 version = "0.1.0"
 description = "A Python port of epiprocess"
 readme = "README.rst"
-authors = [
-  {name = "David Weber", email = "dsweber2@pm.me"}
-]
-maintainers = [
-  {name = "David Weber", email = "dsweber2@pm.me"}
-]
-classifiers = [
-
-]
-license = {text = "MIT license"}
-dependencies = [
-  "typer"
-]
+authors = [{ name = "David Weber", email = "dsweber2@pm.me" }]
+requires-python = ">=3.9"
+maintainers = [{ name = "David Weber", email = "dsweber2@pm.me" }]
+classifiers = []
+license = { text = "MIT license" }
+dependencies = ["pandas", "epiweeks"]
 
 [project.optional-dependencies]
 dev = [
-    "coverage",  # testing
-    "mypy",  # linting
-    "pytest",  # testing
-    "ruff"  # linting
+  "coverage", # testing
+  "mypy",     # linting
+  "pytest",   # testing
+  "ruff",     # linting
 ]
 
 [project.urls]
@@ -36,12 +29,10 @@ changelog = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutt
 homepage = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.project_slug }}"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.package-data]
 "*" = ["*.*"]
-
-
 
 
 # Mypy
@@ -60,4 +51,3 @@ warn_no_return = true
 module = "tests.*"
 allow_untyped_defs = true
 disable_error_code = "attr-defined"
-
