@@ -16,6 +16,7 @@ dependencies = [
   "pandas[parquet]",
   "epiweeks",
   "epidatpy @ git+https://github.com/cmu-delphi/epidatpy.git#egg=epidatpy",
+  "ipykernel>=6.29.5",
 ]
 
 [project.optional-dependencies]

@@ -1,11 +1,12 @@
 """Main module."""
 
+from typing import Optional, Union
 import pandas as pd
 
 
 @pd.api.extensions.register_dataframe_accessor("epi_snap")
 class EpiSnapAccessor:
-    def __init__(self, pandas_obj):
+    def __init__(self, pandas_obj: pd.DataFrame):
         self._validate(pandas_obj)
         self._obj = pandas_obj
 
@@ -15,8 +16,8 @@ class EpiSnapAccessor:
             raise AttributeError("Must have 'geo_value' and 'time_value'.")
 
     def as_epi_snap(
-        self, as_of: pd.Timestamp | None = None, extra_keys: tuple | list = ()
-    ):
+        self, as_of: Optional[pd.Timestamp] = None, extra_keys: Union[tuple, list] = ()
+    ) -> pd.DataFrame:
         obj = self._obj
         # default set the as_of to the max value
         if as_of is None:
