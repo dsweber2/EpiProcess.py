@@ -1,3 +1,4 @@
+from functools import reduce
 from pathlib import Path
 
 from epidatpy import EpiDataContext, EpiRange
@@ -18,14 +19,15 @@ if not Path("dv_subset.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "percent_cli"})
-        .loc[["geo_value", "time_value", "version", "percent_cli"]]
+        .loc[:, ["geo_value", "time_value", "version", "percent_cli"]]
     )
     # TODO: as epi_archive
-    dv_subset.to_parquet("dv_subset.parquet")
+    dv_subset.to_parquet("data/dv_subset.parquet")
 else:
-    dv_subset = pd.read_parquet("dv_subset.parquet")
+    dv_subset = pd.read_parquet("data/dv_subset.parquet")
 
-if not Path("case_rate_subset .parquet").exists():
+
+if not Path("case_rate_subset.parquet").exists():
     case_rate_subset = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -39,12 +41,12 @@ if not Path("case_rate_subset .parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "case_rate_7d_av"})
-        .loc[["geo_value", "time_value", "version", "case_rate_7d_av"]]
+        .loc[:, ["geo_value", "time_value", "version", "case_rate_7d_av"]]
     )
     # TODO: as epi_archive
-    case_rate_subset.to_parquet("case_rate_subset.parquet")
+    case_rate_subset.to_parquet("data/case_rate_subset.parquet")
 else:
-    case_rate_subset = pd.read_parquet("case_rate_subset.parquet")
+    case_rate_subset = pd.read_parquet("data/case_rate_subset.parquet")
 
 # TODO: epix_merge the two above? https://github.com/cmu-delphi/epiprocess/blob/dev/data-raw/archive_cases_dv_subset.R
 
@@ -63,7 +65,10 @@ if not Path("incidence_num_outlier_example.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "cases"})
-        .loc[["geo_value", "time_value", "cases"]]
+        .loc[:, ["geo_value", "time_value", "cases"]]
+    )
+    incidence_num_outlier_example.to_parquet(
+        "data/incidence_num_outlier_example.parquet"
     )
     # TODO: as epi_df
 else:
@@ -71,8 +76,6 @@ else:
         "incidence_num_outlier_example.parquet"
     )
 
-
-# Convert the R code above to Python
 if not Path("jhu_csse_daily_subset.parquet").exists():
     confirmed_incidence_num = (
         EpiDataContext(use_cache=True)
@@ -86,9 +89,8 @@ if not Path("jhu_csse_daily_subset.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "cases"})
-        .loc[["geo_value", "time_value", "cases"]]
+        .loc[:, ["geo_value", "time_value", "cases"]]
     )
-
     confirmed_7dav_incidence_num = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -101,9 +103,8 @@ if not Path("jhu_csse_daily_subset.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "cases_7d_av"})
-        .loc[["geo_value", "time_value", "cases_7d_av"]]
+        .loc[:, ["geo_value", "time_value", "cases_7d_av"]]
     )
-
     confirmed_7dav_incidence_prop = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -116,9 +117,8 @@ if not Path("jhu_csse_daily_subset.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "case_rate_7d_av"})
-        .loc[["geo_value", "time_value", "case_rate_7d_av"]]
+        .loc[:, ["geo_value", "time_value", "case_rate_7d_av"]]
     )
-
     deaths_7dav_incidence_prop = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -131,14 +131,17 @@ if not Path("jhu_csse_daily_subset.parquet").exists():
         )
         .df()
         .rename(columns={"issue": "version", "value": "death_rate_7d_av"})
-        .loc[["geo_value", "time_value", "death_rate_7d_av"]]
+        .loc[:, ["geo_value", "time_value", "death_rate_7d_av"]]
     )
-
-    jhu_csse_daily_subset = (
-        confirmed_incidence_num.join(confirmed_7dav_incidence_num)
-        .join(confirmed_7dav_incidence_prop)
-        .join(deaths_7dav_incidence_prop)
+    jhu_csse_daily_subset = reduce(
+        pd.merge,
+        [
+            confirmed_incidence_num,
+            confirmed_7dav_incidence_num,
+            confirmed_7dav_incidence_prop,
+            deaths_7dav_incidence_prop,
+        ],
     )
-    jhu_csse_daily_subset.to_parquet("jhu_csse_daily_subset.parquet")
+    jhu_csse_daily_subset.to_parquet("data/jhu_csse_daily_subset.parquet")
 else:
-    jhu_csse_daily_subset = pd.read_parquet("jhu_csse_daily_subset.parquet")
+    jhu_csse_daily_subset = pd.read_parquet("data/jhu_csse_daily_subset.parquet")

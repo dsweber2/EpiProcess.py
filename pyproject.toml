@@ -13,7 +13,7 @@ maintainers = [{ name = "David Weber", email = "dsweber2@pm.me" }]
 classifiers = []
 license = { text = "MIT license" }
 dependencies = [
-  "pandas",
+  "pandas[parquet]",
   "epiweeks",
   "epidatpy @ git+https://github.com/cmu-delphi/epidatpy.git#egg=epidatpy",
 ]
