@@ -12,7 +12,11 @@ requires-python = ">=3.9"
 maintainers = [{ name = "David Weber", email = "dsweber2@pm.me" }]
 classifiers = []
 license = { text = "MIT license" }
-dependencies = ["pandas", "epiweeks"]
+dependencies = [
+  "pandas",
+  "epiweeks",
+  "epidatpy @ git+https://github.com/cmu-delphi/epidatpy.git#egg=epidatpy",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -23,10 +27,8 @@ dev = [
 ]
 
 [project.urls]
-
-bugs = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.project_slug }}/issues"
-changelog = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.project_slug }}/blob/master/changelog.md"
-homepage = "https://github.com/{{ cookiecutter.github_username }}/{{ cookiecutter.project_slug }}"
+bugs = "https://github.com/dsweber2/EpiProcessPy/issues"
+homepage = "https://github.com/dsweber2/EpiProcessPy"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
