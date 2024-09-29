@@ -1,6 +1,9 @@
 """Main module."""
 
+from typing import Literal
+
 import pandas as pd
+from pandas.core.groupby import DataFrameGroupBy
 
 
 @pd.api.extensions.register_dataframe_accessor("epi_snap")
@@ -11,14 +14,13 @@ class EpiSnapAccessor:
 
     @staticmethod
     def _validate(obj):
-        if not set(obj.columns) >= {"geo_value", "time_value"}:
+        must_contain = {"geo_value", "time_value"}
+        if not set(obj.index.names) >= must_contain and not set(obj.columns) >= must_contain:
             raise AttributeError("Must have 'geo_value' and 'time_value'.")
 
     def as_epi_snap(self, as_of: pd.Timestamp | None = None, extra_keys: tuple | list = ()) -> pd.DataFrame:
         obj = self._obj
-        # default set the as_of to the max value
-        if as_of is None:
-            as_of = self._obj.time_value.max()
+        as_of = as_of or self._obj.time_value.max()
         key_names = ["geo_value", *extra_keys, "time_value"]
         if self._obj.index.names != key_names:
             if obj.index.names == [None]:
@@ -47,11 +49,25 @@ class EpiSnapAccessor:
         )
         return self._obj.reindex(new_index)
 
-    def fill(self, method: str = "ffill") -> pd.DataFrame:
+    def fill(self, value: str, method: Literal["ffill", "bfill"] | None = "ffill") -> pd.DataFrame:
         """Fill in missing values."""
-        return self._obj.groupby().fillna(method=method)
+        return self._obj.assign(value=self.group()[value].fillna(method=method))
 
-    def sum_group(self, key: str): ...
+    def sum_group(self, key: str):
+        """Sum over a group index."""
+        sum_df = self._obj.groupby(key).sum()
+        if "geo_value" not in sum_df.columns:
+            sum_df["geo_value"] = "total"
+        if "time_value" not in sum_df.columns:
+            sum_df["time_value"] = 0
+        return sum_df.reset_index().set_index(["geo_value", "time_value"])
+
+    def keys(self, exclude="time_value") -> list[str]:
+        return [x for x in self._obj.index.names if x not in exclude]
+
+    def group(self, exclude="time_value") -> DataFrameGroupBy:
+        """group by all indices except time."""
+        return self._obj.groupby(self.keys(exclude))
 
 
 @pd.api.extensions.register_dataframe_accessor("epi_arch")
@@ -62,35 +78,25 @@ class EpiArchiveAccessor:
 
     @staticmethod
     def _validate(obj):
-        if not set(obj.columns) >= {"geo_value", "time_value", "version"}:
+        must_contain = {"geo_value", "time_value", "version"}
+        if not set(obj.index.names) >= must_contain and not set(obj.columns) >= must_contain:
             raise AttributeError("Must have 'geo_value', 'time_value', and 'version'.")
 
-    def as_epi_arch(
-            self,
-            extra_keys: union[tuple, list] = ()
-    ):
+    def as_epi_arch(self, extra_keys: tuple | list = ()):
         obj = self._obj
-        # default set the as_of to the max value
-        if as_of is None:
-            as_of = self._obj.time_value.max()
-        elif not isinstance(as_of, pd.Timestamp):
-            pass
-        key_names = ["version", "geo_value",  *extra_keys, "time_value"]
+        key_names = ["version", "geo_value", *extra_keys, "time_value"]
         if self._obj.index.names != key_names:
             if obj.index.names == [None]:
                 drop_index = True
             else:
                 drop_index = False
-            obj = obj.reset_index(drop = drop_index).set_index(key_names)
-        obj.attrs["as_of"] = as_of
-
+            obj = obj.reset_index(drop=drop_index).set_index(key_names)
         return obj
 
     def group(self):
         """group by all indices except time."""
         names_without_time = list(self._obj.index.names)
-        names_without_time.remove('time_value')
+        names_without_time.remove("time_value")
         return self._obj.groupby(names_without_time)
 
-    def slide(self):
-        ...
+    def slide(self): ...

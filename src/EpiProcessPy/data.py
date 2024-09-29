@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 from epidatpy import EpiDataContext, EpiRange
 
+
 if not Path("dv_subset.parquet").exists():
     dv_subset = (
         EpiDataContext(use_cache=True)
