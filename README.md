@@ -24,7 +24,7 @@ We hope that the Python version will be much simpler due to Pandas' better suppo
         -   [ ] epiweek index
     -   [x] `keys` get the keys of the dataframe.
     -   [x] `group` group by keys.
-    -   [ ] `growth_rate` growth rate functions.
+    -   [x] `growth_rate` growth rate functions.
     -   [ ] `correlation` correlations between columns.
     -   [ ] `detect_outliers` detect outliers.
     -   [ ] `autoplot` plot the dataframe.
@@ -47,4 +47,3 @@ We hope that the Python version will be much simpler due to Pandas' better suppo
         -   [x] daily cadence dates index
         -   [ ] weekly cadence dates index
         -   [ ] epiweek index
-    -   [ ]

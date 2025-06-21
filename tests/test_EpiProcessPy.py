@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -316,3 +317,190 @@ def test_slide_functions_grouping_behavior():
     sum_result = test_df.epi_snap.slide_sum(window_size=2)
     assert sum_result.loc[("state_a", dates[3]), "values"] == 70.0  # [30,40] -> 70
     assert sum_result.loc[("state_b", dates[0]), "values"] == 100.0  # [100] -> 100 (not mixed with state_a)
+
+
+def test_growth_rate_with_manual_calculation():
+    """Test growth rate with manually calculated values."""
+    # Create test data with known growth patterns
+    dates = pd.date_range("2020-01-01", periods=8, freq="D")
+    data = {
+        "geo_value": ["state_a"] * 8,
+        "time_value": dates,
+        "cases": [100, 110, 121, 133.1, 146.41, 161.051, 177.1561, 194.87171],  # 10% growth each day
+        "deaths": [10, 20, 30, 40, 50, 60, 70, 80],  # Linear growth
+        "constant": [50, 50, 50, 50, 50, 50, 50, 50],  # No growth
+    }
+
+    test_df = pd.DataFrame(data).set_index(["geo_value", "time_value"])
+
+    # Test growth rate with window_size=1 (no smoothing)
+    growth_result = test_df.epi_snap.growth_rate(window_size=1)
+
+    # Manual calculations for 'cases' column (10% growth rate)
+    # Growth rate = (new_value - old_value) / old_value
+    # Day 1: NaN (no previous value)
+    assert pd.isna(growth_result.iloc[0]["cases"])
+
+    # Day 2: (110 - 100) / 100 = 0.10 = 10%
+    assert abs(growth_result.iloc[1]["cases"] - 0.10) < 1e-10
+
+    # Day 3: (121 - 110) / 110 = 0.10 = 10%
+    assert abs(growth_result.iloc[2]["cases"] - 0.10) < 1e-10
+
+    # Day 4: (133.1 - 121) / 121 = 0.10 = 10%
+    assert abs(growth_result.iloc[3]["cases"] - 0.10) < 1e-10
+
+    # Manual calculations for 'deaths' column (linear growth)
+    # Day 2: (20 - 10) / 10 = 1.0 = 100%
+    assert abs(growth_result.iloc[1]["deaths"] - 1.0) < 1e-10
+
+    # Day 3: (30 - 20) / 20 = 0.5 = 50%
+    assert abs(growth_result.iloc[2]["deaths"] - 0.5) < 1e-10
+
+    # Day 4: (40 - 30) / 30 = 0.333... = 33.33%
+    assert abs(growth_result.iloc[3]["deaths"] - (1 / 3)) < 1e-10
+
+    # Day 5: (50 - 40) / 40 = 0.25 = 25%
+    assert abs(growth_result.iloc[4]["deaths"] - 0.25) < 1e-10
+
+    # Manual calculations for 'constant' column (no growth)
+    # All growth rates should be 0 after the first NaN
+    for i in range(1, len(test_df)):
+        assert abs(growth_result.iloc[i]["constant"] - 0.0) < 1e-10
+
+
+def test_growth_rate_with_smoothing():
+    """Test growth rate with rolling mean smoothing."""
+    # Create test data with some volatility that smoothing should reduce
+    dates = pd.date_range("2020-01-01", periods=6, freq="D")
+    data = {
+        "geo_value": ["state_a"] * 6,
+        "time_value": dates,
+        "volatile": [100, 150, 110, 160, 120, 170],  # Oscillating pattern
+    }
+
+    test_df = pd.DataFrame(data).set_index(["geo_value", "time_value"])
+
+    # Test with window_size=3 for smoothing
+    growth_smoothed = test_df.epi_snap.growth_rate(window_size=3)
+
+    # Manual calculation of smoothed values and growth rates
+    # Window 1: [100] -> 100.0
+    # Window 2: [100, 150] -> 125.0
+    # Window 3: [100, 150, 110] -> 120.0
+    # Window 4: [150, 110, 160] -> 140.0
+    # Window 5: [110, 160, 120] -> 130.0
+    # Window 6: [160, 120, 170] -> 150.0
+
+    # Growth rates:
+    # Day 1: NaN (no previous smoothed value)
+    assert pd.isna(growth_smoothed.iloc[0]["volatile"])
+
+    # Day 2: (125.0 - 100.0) / 100.0 = 0.25 = 25%
+    assert abs(growth_smoothed.iloc[1]["volatile"] - 0.25) < 1e-10
+
+    # Day 3: (120.0 - 125.0) / 125.0 = -0.04 = -4%
+    assert abs(growth_smoothed.iloc[2]["volatile"] - (-0.04)) < 1e-10
+
+    # Day 4: (140.0 - 120.0) / 120.0 = 0.16667... ≈ 16.67%
+    assert abs(growth_smoothed.iloc[3]["volatile"] - (20 / 120)) < 1e-10
+
+    # Day 5: (130.0 - 140.0) / 140.0 = -0.07143... ≈ -7.14%
+    assert abs(growth_smoothed.iloc[4]["volatile"] - (-10 / 140)) < 1e-10
+
+    # Day 6: (150.0 - 130.0) / 130.0 = 0.15385... ≈ 15.38%
+    assert abs(growth_smoothed.iloc[5]["volatile"] - (20 / 130)) < 1e-10
+
+
+def test_growth_rate_grouping_behavior():
+    """Test that growth rate calculations are done within groups."""
+    # Create test data with two groups having different growth patterns
+    dates = pd.date_range("2020-01-01", periods=4, freq="D")
+    data = {
+        "geo_value": ["state_a"] * 4 + ["state_b"] * 4,
+        "time_value": dates.tolist() + dates.tolist(),
+        "values": [100, 110, 121, 133.1, 1000, 1100, 1210, 1331],  # Both 10% growth, different scales
+    }
+
+    test_df = pd.DataFrame(data).set_index(["geo_value", "time_value"])
+
+    # Test growth rate with no smoothing
+    growth_result = test_df.epi_snap.growth_rate(window_size=1)
+
+    # Both groups should have the same 10% growth rate pattern
+    # state_a: Day 2 growth = (110 - 100) / 100 = 0.10
+    assert abs(growth_result.loc[("state_a", dates[1]), "values"] - 0.10) < 1e-10
+
+    # state_b: Day 2 growth = (1100 - 1000) / 1000 = 0.10
+    assert abs(growth_result.loc[("state_b", dates[1]), "values"] - 0.10) < 1e-10
+
+    # state_a: Day 3 growth = (121 - 110) / 110 = 0.10
+    assert abs(growth_result.loc[("state_a", dates[2]), "values"] - 0.10) < 1e-10
+
+    # state_b: Day 3 growth = (1210 - 1100) / 1100 = 0.10
+    assert abs(growth_result.loc[("state_b", dates[2]), "values"] - 0.10) < 1e-10
+
+    # Verify that calculations don't cross group boundaries
+    # If they did, we'd see different growth rates due to the scale difference
+
+
+def test_growth_rate_edge_cases():
+    """Test growth rate with edge cases."""
+    # Create test data with edge cases
+    dates = pd.date_range("2020-01-01", periods=5, freq="D")
+    data = {
+        "geo_value": ["test"] * 5,
+        "time_value": dates,
+        "zeros": [0, 0, 0, 0, 0],  # All zeros
+        "zero_to_positive": [0, 10, 20, 30, 40],  # Starting from zero
+        "negative": [-10, -5, -2, -1, 0],  # Negative values
+        "mixed_signs": [10, -5, 15, -3, 12],  # Mixed positive/negative
+    }
+
+    test_df = pd.DataFrame(data).set_index(["geo_value", "time_value"])
+    growth_result = test_df.epi_snap.growth_rate(window_size=1)
+
+    # Test all zeros - growth rate should be NaN for all periods after first
+    assert pd.isna(growth_result["zeros"].iloc[0])  # First is always NaN
+    for i in range(1, len(test_df)):
+        # 0/0 should result in NaN
+        assert pd.isna(growth_result["zeros"].iloc[i])
+
+    # Test zero to positive - growth rate should be infinite (represented as inf)
+    assert pd.isna(growth_result["zero_to_positive"].iloc[0])  # First is always NaN
+    assert np.isinf(growth_result["zero_to_positive"].iloc[1])  # (10-0)/0 = inf
+
+    # Subsequent growth rates should be finite
+    # (20-10)/10 = 1.0 = 100%
+    assert abs(growth_result["zero_to_positive"].iloc[2] - 1.0) < 1e-10
+
+    # Test negative values - should work normally
+    # (-5 - (-10)) / (-10) = 5 / (-10) = -0.5 = -50%
+    assert abs(growth_result["negative"].iloc[1] - (-0.5)) < 1e-10
+
+    # (-2 - (-5)) / (-5) = 3 / (-5) = -0.6 = -60%
+    assert abs(growth_result["negative"].iloc[2] - (-0.6)) < 1e-10
+
+
+def test_growth_rate_column_selection():
+    """Test growth rate with specific column selection."""
+    dates = pd.date_range("2020-01-01", periods=4, freq="D")
+    data = {
+        "geo_value": ["state_a"] * 4,
+        "time_value": dates,
+        "cases": [100, 110, 121, 133.1],  # 10% growth
+        "deaths": [10, 20, 30, 40],  # Various growth rates
+        "population": [1000000, 1000000, 1000000, 1000000],  # Constant (should not change)
+    }
+
+    test_df = pd.DataFrame(data).set_index(["geo_value", "time_value"])
+
+    # Test with specific columns
+    growth_result = test_df.epi_snap.growth_rate(columns=["cases", "deaths"], window_size=1)
+
+    # Should only have cases and deaths columns
+    assert set(growth_result.columns) == {"cases", "deaths"}
+
+    # Verify calculations are correct for selected columns
+    assert abs(growth_result.iloc[1]["cases"] - 0.10) < 1e-10  # 10% growth
+    assert abs(growth_result.iloc[1]["deaths"] - 1.0) < 1e-10  # 100% growth

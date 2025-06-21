@@ -132,17 +132,16 @@ class EpiSnapAccessor:
             exclude = ["time_value"]
         return self._obj.groupby(self.keys(exclude))
 
-    def growth_rate(self, columns: list[str] | None = None) -> pd.DataFrame:
-        """Calculate growth rate within each group."""
-        if columns is None:
-            columns = self._obj.columns.tolist()
-        return self.group()[columns].pct_change(periods=1)
+    def growth_rate(self, columns: list[str] | None = None, window_size: int | pd.Timedelta = 1) -> pd.DataFrame:
+        """Calculate growth rate within each group.
 
-    def growth_rate_7d_av(self, columns: list[str] | None = None) -> pd.DataFrame:
-        """Calculate 7-day average growth rate within each group."""
+        Growth rate is calculated as the percentage change from the previous period
+        after applying a rolling mean to smooth the data.
+        """
         if columns is None:
             columns = self._obj.columns.tolist()
-        return self.group()[columns].rolling(window=7).mean().pct_change(periods=1)
+        result = self.group()[columns].rolling(window=window_size, min_periods=1).mean().pct_change(periods=1)
+        return self._fix_grouped_rolling_result(result)
 
 
 @pd.api.extensions.register_dataframe_accessor("epi_arch")
