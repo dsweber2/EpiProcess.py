@@ -19,6 +19,9 @@ We hope that the Python version will be much simpler due to Pandas' better suppo
     -   [x] `sum_groups` sum over a group index.
     -   [x] `fill` fill in missing values.
     -   [x] `complete` fill in missing values.
+        -   [x] daily cadence dates index
+        -   [ ] weekly cadence dates index
+        -   [ ] epiweek index
     -   [x] `keys` get the keys of the dataframe.
     -   [x] `group` group by keys.
     -   [ ] `growth_rate` growth rate functions.
@@ -28,6 +31,7 @@ We hope that the Python version will be much simpler due to Pandas' better suppo
     -   [ ] `print` print the dataframe.
 -   [ ] Implement `epi_archive` methods.
     -   [x] `as_epi_arch` constructor.
+    -   [ ] Diff-based compression.
     -   [ ] `as_of` subsetter and `epi_df` constructor and `as_of_current`.
     -   [ ] `slide` rolling functions.
     -   [ ] `epix_merge` merge two `epi_arch` objects.
@@ -37,8 +41,10 @@ We hope that the Python version will be much simpler due to Pandas' better suppo
     -   [ ] `keys` get the keys of the dataframe.
     -   [ ] `autoplot` plot the dataframe.
     -   [ ] `print` print the dataframe.
+    -   [ ] Archive -> archive transforms.
 -   [ ] General methods.
-
-## Work Document
-
--   https://docs.google.com/document/d/1WSDlH54ibvBMql78-YUsSOxVC9uW6xAYhcjYvjHKQYU/edit
+    -   [ ] Datetime handling.
+        -   [x] daily cadence dates index
+        -   [ ] weekly cadence dates index
+        -   [ ] epiweek index
+    -   [ ]
