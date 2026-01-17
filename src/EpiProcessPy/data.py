@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 from epidatpy import EpiDataContext, EpiRange
 
-if not Path("dv_subset.parquet").exists():
+if not Path("data/dv_subset.parquet").exists():
     dv_subset = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -26,7 +26,7 @@ else:
     dv_subset = pd.read_parquet("data/dv_subset.parquet")
 
 
-if not Path("case_rate_subset.parquet").exists():
+if not Path("data/case_rate_subset.parquet").exists():
     case_rate_subset = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -50,7 +50,7 @@ else:
 # TODO: epix_merge the two above? https://github.com/cmu-delphi/epiprocess/blob/dev/data-raw/archive_cases_dv_subset.R
 
 
-if not Path("incidence_num_outlier_example.parquet").exists():
+if not Path("data/incidence_num_outlier_example.parquet").exists():
     incidence_num_outlier_example = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(
@@ -69,9 +69,9 @@ if not Path("incidence_num_outlier_example.parquet").exists():
     incidence_num_outlier_example.to_parquet("data/incidence_num_outlier_example.parquet")
     # TODO: as epi_df
 else:
-    incidence_num_outlier_example = pd.read_parquet("incidence_num_outlier_example.parquet")
+    incidence_num_outlier_example = pd.read_parquet("data/incidence_num_outlier_example.parquet")
 
-if not Path("jhu_csse_daily_subset.parquet").exists():
+if not Path("data/jhu_csse_daily_subset.parquet").exists():
     confirmed_incidence_num = (
         EpiDataContext(use_cache=True)
         .pub_covidcast(

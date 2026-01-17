@@ -504,3 +504,13 @@ def test_growth_rate_column_selection():
     # Verify calculations are correct for selected columns
     assert abs(growth_result.iloc[1]["cases"] - 0.10) < 1e-10  # 10% growth
     assert abs(growth_result.iloc[1]["deaths"] - 1.0) < 1e-10  # 100% growth
+
+
+@pytest.fixture
+def test_archive():
+    return EpiProcessPy.dv_subset.epi_arch.as_epi_arch()
+
+
+# def test_a(test_archive):
+#     breakpoint()
+#     print(test_archive)

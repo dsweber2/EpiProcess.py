@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "EpiProcessPy"
 version = "0.1.0"
-description = "A Python port of epiprocess"
-readme = "README.rst"
+description = "A Python feature port of epiprocess"
+readme = "README.md"
 authors = [
   { name = "David Weber", email = "dsweber2@pm.me" },
   { name = "Dmitry Shemetov", email = "dmtryshmtv@gmail.com" },
@@ -23,9 +23,6 @@ dependencies = [
   "epiweeks>=2.3.0",
   "pandas[parquet]>=2",
 ]
-
-[project.optional-dependencies]
-dev = ["mypy", "pytest", "ruff"]
 
 [project.urls]
 bugs = "https://github.com/dsweber2/EpiProcessPy/issues"
@@ -46,23 +43,12 @@ lint.extend-select = [
   "UP", # pyupgrade
 ]
 
-
-# Mypy
-# ----
-
-[tool.mypy]
-files = "."
-
-# Use strict defaults
-strict = true
-warn_unreachable = true
-warn_no_return = true
-
-[[tool.mypy.overrides]]
-# Don't require test functions to include types
-module = "tests.*"
-disallow_untyped_defs = false
-disable_error_code = "attr-defined"
-
-[tool.uv]
-dev-dependencies = ["ipykernel>=6.29.5"]
+[dependency-groups]
+dev = [
+  "ipykernel>=6.29.5",
+  "pytest>=8.3.3",
+  "pytest-cov>=7.0.0",
+  "pytest-mock>=3.15.1",
+  "ruff>=0.6.8",
+  "ty>=0.0.12",
+]
