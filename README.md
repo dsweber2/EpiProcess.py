@@ -59,4 +59,8 @@ Using [uv](https://github.com/astral-sh/uv):
 uv sync
 # Run tests
 uv run pytest tests/ --cov=src --cov-config=pyproject.toml --cov-report=term-missing
+# Build the docs
+uv run mkdocs build
+# Serve the docs locally
+uv run mkdocs serve
 ```

@@ -52,3 +52,8 @@ dev = [
   "ruff>=0.6.8",
   "ty>=0.0.12",
 ]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.1",
+    "mkdocstrings[python]>=1.0.0",
+]

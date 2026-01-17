@@ -1,0 +1,6 @@
+site_name: Epiprocess Documentation
+plugins:
+    - mkdocstrings:
+          handlers:
+              python:
+                  paths: [src]

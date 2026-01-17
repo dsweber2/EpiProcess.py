@@ -18,6 +18,8 @@ def _get_level_or_column(df: pd.DataFrame, name: str) -> pd.Series:
 
 @pd.api.extensions.register_dataframe_accessor("epi_snap")
 class EpiSnapAccessor:
+    """Extension for DataFrames with snapshot structure."""
+
     def __init__(self, pandas_obj: pd.DataFrame):
         self._validate(pandas_obj)
         self._obj = pandas_obj
@@ -191,6 +193,8 @@ class EpiSnapAccessor:
 
 @pd.api.extensions.register_dataframe_accessor("epi_arch")
 class EpiArchiveAccessor:
+    """Extension for DataFrames with archive structure."""
+
     def __init__(self, pandas_obj: pd.DataFrame):
         self._validate(pandas_obj)
         self._obj = pandas_obj
