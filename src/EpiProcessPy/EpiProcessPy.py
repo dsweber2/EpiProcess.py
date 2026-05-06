@@ -242,26 +242,133 @@ class EpiArchiveAccessor:
         """
         return (self.as_of(v) for v in versions)
 
-    def merge_archive(self, other: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def _locf_across_versions(df: pd.DataFrame) -> pd.DataFrame:
+        """Apply LOCF within each (geo_value, time_value) group, across versions.
+
+        This is the correct LOCF behavior for archives: for a fixed (geo, time) pair,
+        carry forward values across versions when observations are missing.
+        """
+        if df.empty:
+            return df
+        df_reset = df.reset_index()
+        df_sorted = df_reset.sort_values(["geo_value", "time_value", "version"])
+        index_cols = ["version", "geo_value", "time_value"]
+        value_cols = [c for c in df_sorted.columns if c not in index_cols]
+        df_sorted[value_cols] = df_sorted.groupby(["geo_value", "time_value"])[value_cols].ffill()
+        return df_sorted.set_index(index_cols).sort_index()
+
+    def merge_archive(self, other: pd.DataFrame, sync: Literal["locf", "na", "truncate"] = "locf") -> pd.DataFrame:
         """Combine two epi_arch dataframes.
 
         This is a side-by-side merge that uses LOCF to fill in missing values.
+
+        Parameters
+        ----------
+        other : pd.DataFrame
+            Another epi_archive DataFrame to merge with.
+        sync : Literal["locf", "na", "truncate"]
+            How to handle version misalignment:
+            - "locf" (default): Carry forward last observation for missing versions
+            - "na": Fill missing versions with NA
+            - "truncate": Keep only versions present in both archives
+
+        Returns
+        -------
+        pd.DataFrame
+            Merged epi_archive with columns from both inputs (suffixed _x and _y
+            if there are overlapping column names).
         """
-        # Validate that `other` is an epi_arch object.
-        EpiArchiveAccessor._validate(other)
-        # Create a common index of keys, time_values, and versions
+        other = other.epi_arch.as_epi_arch()
         combined_index = self._obj.index.union(other.index)
-        # Reindex both dataframes to the combined index
         df1_reindexed = self._obj.reindex(combined_index)
         df2_reindexed = other.reindex(combined_index)
-        # Use LOCF to fill in missing values in every column
-        df1_filled = df1_reindexed.groupby(level=[n for n in combined_index.names if n != "time_value"]).ffill()
-        df2_filled = df2_reindexed.groupby(level=[n for n in combined_index.names if n != "time_value"]).ffill()
-        # If there are any value column names shared, add suffixes to distinguish them
+
+        if sync == "locf":
+            df1_filled = self._locf_across_versions(df1_reindexed)
+            df2_filled = self._locf_across_versions(df2_reindexed)
+        elif sync == "na":
+            df1_filled, df2_filled = df1_reindexed, df2_reindexed
+        elif sync == "truncate":
+            common_versions = set(self._obj.index.get_level_values("version")).intersection(
+                set(other.index.get_level_values("version"))
+            )
+            mask = combined_index.get_level_values("version").isin(common_versions)
+            df1_filled = df1_reindexed.loc[mask]
+            df2_filled = df2_reindexed.loc[mask]
+        else:
+            raise ValueError(f"Unknown sync option: {sync}")
+
         common_cols = df1_filled.columns.intersection(df2_filled.columns)
         if len(common_cols) > 0:
-            df1_filled = df1_filled.add_suffix("_1")
-            df2_filled = df2_filled.add_suffix("_2")
-        # Combine the two dataframes
-        merged_df = pd.concat([df1_filled, df2_filled], axis=1)
-        return merged_df
+            df1_filled = df1_filled.add_suffix("_x")
+            df2_filled = df2_filled.add_suffix("_y")
+        return pd.concat([df1_filled, df2_filled], axis=1)
+
+    def compare_archive(
+        self,
+        other: pd.DataFrame,
+        value_col: str | None = None,
+        sync: Literal["locf", "na", "truncate"] = "locf",
+        by: Literal["geo", "version", "both"] = "both",
+    ) -> pd.DataFrame:
+        """Compare two archives and compute difference statistics.
+
+        Parameters
+        ----------
+        other : pd.DataFrame
+            Another epi_archive DataFrame to compare against.
+        value_col : str, optional
+            The column to compare. If None, will auto-detect from common columns.
+        sync : Literal["locf", "na", "truncate"]
+            How to handle version misalignment (passed to merge_archive).
+        by : Literal["geo", "version", "both"]
+            Aggregation level:
+            - "geo": per (version, geo_value) - most granular
+            - "version": per version only (aggregate across geos)
+            - "both": returns both levels (geo-level with _all_ marker for version aggregate)
+
+        Returns
+        -------
+        pd.DataFrame
+            Summary statistics: n_obs, diff_min, diff_max, diff_mean, diff_median,
+            diff_abs_mean, diff_abs_max.
+        """
+        merged = self.merge_archive(other, sync=sync)
+
+        # Auto-detect value column from _x/_y suffixed columns
+        if value_col is None:
+            x_cols = [c[:-2] for c in merged.columns if c.endswith("_x")]
+            y_cols = [c[:-2] for c in merged.columns if c.endswith("_y")]
+            common = set(x_cols).intersection(y_cols)
+            if not common:
+                raise ValueError("No common value columns found to compare")
+            value_col = list(common)[0]
+
+        col_x, col_y = f"{value_col}_x", f"{value_col}_y"
+        if col_x not in merged.columns or col_y not in merged.columns:
+            raise ValueError(f"Column {value_col} not found in both archives")
+
+        merged_reset = merged.reset_index()
+        merged_reset["diff"] = merged_reset[col_x] - merged_reset[col_y]
+        merged_reset["abs_diff"] = merged_reset["diff"].abs()
+
+        agg_funcs = {
+            "n_obs": ("diff", "count"),
+            "diff_min": ("diff", "min"),
+            "diff_max": ("diff", "max"),
+            "diff_mean": ("diff", "mean"),
+            "diff_median": ("diff", "median"),
+            "diff_abs_mean": ("abs_diff", "mean"),
+            "diff_abs_max": ("abs_diff", "max"),
+        }
+
+        if by == "geo":
+            return merged_reset.groupby(["version", "geo_value"]).agg(**agg_funcs).reset_index()
+        elif by == "version":
+            return merged_reset.groupby(["version"]).agg(**agg_funcs).reset_index()
+        else:  # "both"
+            geo_stats = merged_reset.groupby(["version", "geo_value"]).agg(**agg_funcs).reset_index()
+            version_stats = merged_reset.groupby(["version"]).agg(**agg_funcs).reset_index()
+            version_stats["geo_value"] = "_all_"
+            return pd.concat([geo_stats, version_stats], ignore_index=True)

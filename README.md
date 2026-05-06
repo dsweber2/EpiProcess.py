@@ -19,29 +19,25 @@ We hope that the Python version can be much simpler due to Pandas' better suppor
     - [x] `sum_groups` sum over a group index.
     - [x] `fill` fill in missing values.
     - [x] `complete` fill in missing values.
-        - [x] daily cadence dates index
-        - [ ] weekly cadence dates index
-        - [ ] epiweek index
     - [x] `keys` get the keys of the dataframe.
     - [x] `group` group by keys.
     - [x] `growth_rate` growth rate functions.
     - [x] `correlation` correlations between columns.
     - [x] `detect_outliers` detect outliers.
-    - [ ] `autoplot` plot the dataframe.
+    - [ ] `autoplot` plot the dataframe (make a time series plot where each line is a distinct geo).
     - [x] `print` print the dataframe.
 - [ ] Implement basic versions of `epi_archive` methods.
     - [x] `as_epi_arch` constructor.
     - [x] `as_of` and `as_of_current`.
     - [x] `slide` rolling functions.
     - [ ] Diff-based compression.
-    - [ ] `epix_merge` merge two `epi_arch` objects.
+    - [x] `merge_archive` merge two `epi_arch` objects with LOCF sync.
+    - [x] `compare_archive` compare two archives and compute difference statistics.
     - [ ] `epix_fill_through_versions` fill archive unobserved history.
     - [ ] `epix_truncate_versions_after` to keep only older versions.
     - [ ] `revision_history` revision history functions.
-    - [ ] `keys` get the keys of the dataframe.
-    - [ ] `autoplot` plot the dataframe.
+    - [ ] `autoplot` plot the dataframe (make a time series plot where each line is a distinct geo, but also we take in a list versions, and we print the snapshots at those versions; see epiprocess-R/R/autoplot.R, autoplot.epi_archive()).
     - [ ] `print` print the dataframe.
-    - [ ] Archive -> archive transforms.
 - [ ] General methods.
     - [ ] Datetime handling.
         - [x] daily cadence dates index

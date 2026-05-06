@@ -14,19 +14,52 @@ def test_data():
     return EpiProcessPy.jhu_csse_daily_subset.epi_snap.as_epi_snap()
 
 
-def test_epi_df(test_data):
+def test__get_level_or_column(test_data: pd.DataFrame):
+    from src.EpiProcessPy.EpiProcessPy import _get_level_or_column
+
+    # Test getting existing index level
+    geo_level = _get_level_or_column(test_data, "geo_value")
+    assert geo_level.equals(test_data.index.get_level_values("geo_value").to_series())
+
+    # Test getting existing column
+    cases_column = _get_level_or_column(test_data, "cases")
+    assert cases_column.equals(test_data["cases"])
+
+    # Test non-existing level/column
+    with pytest.raises(KeyError):
+        _get_level_or_column(test_data, "non_existing")
+
+
+def test_epi_snap_validate(test_data: pd.DataFrame):
+    # Should not raise any exceptions
+    test_data.epi_snap
+    # Modify to create invalid geo_value DataFrame
+    df = EpiProcessPy.jhu_csse_daily_subset.copy()
+    df = df[df["geo_value"].isin(["tx"])]
+    df["geo_value"] = 0  # Invalid type
+    with pytest.raises(TypeError):
+        df.epi_snap
+    # Modify to create invalid time_value DataFrame
+    df = EpiProcessPy.jhu_csse_daily_subset.copy()
+    df = df[df["geo_value"].isin(["tx"])]
+    df["time_value"] = df["time_value"].astype(str)  # Invalid type
+    with pytest.raises(TypeError):
+        df.epi_snap
+
+
+def test_epi_df(test_data: pd.DataFrame):
     assert test_data.attrs["as_of"] == pd.Timestamp("2021-12-31")
     assert test_data.index.names == ["geo_value", "time_value"]
 
 
-def test_sum_groups(test_data):
+def test_sum_groups(test_data: pd.DataFrame):
     out = test_data.epi_snap.sum_groups("geo_value")
     assert set(out.columns) == {"cases", "cases_7d_av", "case_rate_7d_av", "death_rate_7d_av"}
     # Since we have a MultiIndex, check the geo_value level
     assert set(out.index.get_level_values("geo_value")) == {"ca", "fl", "ga", "ny", "pa", "tx"}
 
 
-def test_slide_mean(test_data):
+def test_slide_mean(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_mean(window_size=3)
 
     # Check that result has same structure as input
@@ -40,7 +73,7 @@ def test_slide_mean(test_data):
     pd.testing.assert_series_equal(original_first, result_first, check_dtype=False)
 
 
-def test_slide_sum(test_data):
+def test_slide_sum(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_sum(window_size=3)
 
     # Check structure
@@ -53,7 +86,7 @@ def test_slide_sum(test_data):
     pd.testing.assert_series_equal(original_first, result_first, check_dtype=False)
 
 
-def test_slide_std(test_data):
+def test_slide_std(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_std(window_size=3)
 
     # Check structure
@@ -65,7 +98,7 @@ def test_slide_std(test_data):
     assert result.iloc[0].isna().all()
 
 
-def test_slide_var(test_data):
+def test_slide_var(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_var(window_size=3)
 
     # Check structure
@@ -77,7 +110,7 @@ def test_slide_var(test_data):
     assert result.iloc[0].isna().all()
 
 
-def test_slide_min(test_data):
+def test_slide_min(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_min(window_size=3)
 
     # Check structure
@@ -90,7 +123,7 @@ def test_slide_min(test_data):
     pd.testing.assert_series_equal(original_first, result_first, check_dtype=False)
 
 
-def test_slide_max(test_data):
+def test_slide_max(test_data: pd.DataFrame):
     result = test_data.epi_snap.slide_max(window_size=3)
 
     # Check structure
@@ -511,6 +544,167 @@ def test_archive():
     return EpiProcessPy.dv_subset.epi_arch.as_epi_arch()
 
 
-# def test_a(test_archive):
-#     breakpoint()
-#     print(test_archive)
+def test_merge_archive_locf_behavior():
+    """Test that merge_archive correctly applies LOCF across versions."""
+    # Create archive 1: has observations at version V1 and V3
+    # Use same column name "value" so both get suffixed
+    df1 = pd.DataFrame({
+        "geo_value": ["ca", "ca", "ca", "ca"],
+        "time_value": pd.to_datetime(["2024-08-01", "2024-08-02", "2024-08-01", "2024-08-02"]),
+        "version": pd.to_datetime(["2024-08-01", "2024-08-01", "2024-08-03", "2024-08-03"]),
+        "value": [10.0, 20.0, 11.0, 21.0],  # Updated values at V3
+    }).set_index(["version", "geo_value", "time_value"])
+
+    # Create archive 2: has observations only at version V2
+    df2 = pd.DataFrame({
+        "geo_value": ["ca", "ca"],
+        "time_value": pd.to_datetime(["2024-08-01", "2024-08-02"]),
+        "version": pd.to_datetime(["2024-08-02", "2024-08-02"]),
+        "value": [100.0, 200.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    # Merge with LOCF
+    merged = df1.epi_arch.merge_archive(df2, sync="locf")
+
+    # Expected behavior:
+    # At V1: value_x=[10,20], value_y=[NA,NA] (value_y not yet observed)
+    # At V2: value_x=[10,20] (LOCF from V1), value_y=[100,200] (first observation)
+    # At V3: value_x=[11,21] (new values), value_y=[100,200] (LOCF from V2)
+
+    # Check V2 for geo_value="ca", time_value="2024-08-01"
+    v2_ca_0801 = merged.loc[(pd.Timestamp("2024-08-02"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v2_ca_0801["value_x"] == 10  # LOCF from V1
+    assert v2_ca_0801["value_y"] == 100  # Actual V2 observation
+
+    # Check V3 for geo_value="ca", time_value="2024-08-01"
+    v3_ca_0801 = merged.loc[(pd.Timestamp("2024-08-03"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v3_ca_0801["value_x"] == 11  # Actual V3 observation
+    assert v3_ca_0801["value_y"] == 100  # LOCF from V2
+
+    # Check V1 - value_y should be NA since it wasn't observed yet
+    v1_ca_0801 = merged.loc[(pd.Timestamp("2024-08-01"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v1_ca_0801["value_x"] == 10
+    assert pd.isna(v1_ca_0801["value_y"])
+
+
+def test_merge_archive_no_overlap():
+    """Test merge when archives have completely different version sets."""
+    # Use same column name "value" so both get suffixed
+    df1 = pd.DataFrame({
+        "geo_value": ["ca"],
+        "time_value": pd.to_datetime(["2024-08-01"]),
+        "version": pd.to_datetime(["2024-08-01"]),
+        "value": [10.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    df2 = pd.DataFrame({
+        "geo_value": ["ca"],
+        "time_value": pd.to_datetime(["2024-08-01"]),
+        "version": pd.to_datetime(["2024-08-05"]),
+        "value": [50.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    merged = df1.epi_arch.merge_archive(df2, sync="locf")
+
+    # At V1: value_x=10, value_y=NA
+    v1 = merged.loc[(pd.Timestamp("2024-08-01"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v1["value_x"] == 10
+    assert pd.isna(v1["value_y"])
+
+    # At V5: value_x=10 (LOCF), value_y=50
+    v5 = merged.loc[(pd.Timestamp("2024-08-05"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v5["value_x"] == 10  # LOCF
+    assert v5["value_y"] == 50
+
+
+def test_merge_archive_sync_options():
+    """Test different sync options for merge_archive."""
+    df1 = pd.DataFrame({
+        "geo_value": ["ca", "ca"],
+        "time_value": pd.to_datetime(["2024-08-01", "2024-08-01"]),
+        "version": pd.to_datetime(["2024-08-01", "2024-08-02"]),
+        "value": [10.0, 11.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    df2 = pd.DataFrame({
+        "geo_value": ["ca"],
+        "time_value": pd.to_datetime(["2024-08-01"]),
+        "version": pd.to_datetime(["2024-08-02"]),
+        "value": [100.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    # Test "na" sync - should leave NAs instead of LOCF
+    merged_na = df1.epi_arch.merge_archive(df2, sync="na")
+    v1_na = merged_na.loc[(pd.Timestamp("2024-08-01"), "ca", pd.Timestamp("2024-08-01"))]
+    assert v1_na["value_x"] == 10
+    assert pd.isna(v1_na["value_y"])  # No LOCF, stays NA
+
+    # Test "truncate" sync - should only keep common versions
+    merged_trunc = df1.epi_arch.merge_archive(df2, sync="truncate")
+    assert len(merged_trunc) == 1  # Only V2 is common
+    assert pd.Timestamp("2024-08-02") in merged_trunc.index.get_level_values("version")
+    assert pd.Timestamp("2024-08-01") not in merged_trunc.index.get_level_values("version")
+
+
+def test_compare_archive_stats():
+    """Test that compare_archive produces correct difference statistics."""
+    dates = pd.to_datetime(["2024-08-01", "2024-08-02"])
+    version = pd.Timestamp("2024-08-03")
+
+    df1 = pd.DataFrame({
+        "geo_value": ["ca", "ca"],
+        "time_value": dates,
+        "version": [version, version],
+        "value": [10.0, 20.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    df2 = pd.DataFrame({
+        "geo_value": ["ca", "ca"],
+        "time_value": dates,
+        "version": [version, version],
+        "value": [12.0, 18.0],  # Differences: -2, +2
+    }).set_index(["version", "geo_value", "time_value"])
+
+    # Test with by="geo"
+    stats = df1.epi_arch.compare_archive(df2, value_col="value", by="geo")
+    ca_stats = stats[(stats["geo_value"] == "ca") & (stats["version"] == version)].iloc[0]
+
+    assert ca_stats["n_obs"] == 2
+    assert ca_stats["diff_min"] == -2.0  # 10 - 12
+    assert ca_stats["diff_max"] == 2.0   # 20 - 18
+    assert ca_stats["diff_mean"] == 0.0  # (-2 + 2) / 2
+    assert ca_stats["diff_abs_mean"] == 2.0  # (2 + 2) / 2
+
+
+def test_compare_archive_by_options():
+    """Test different 'by' options for compare_archive."""
+    dates = pd.to_datetime(["2024-08-01", "2024-08-02"])
+    version = pd.Timestamp("2024-08-03")
+
+    df1 = pd.DataFrame({
+        "geo_value": ["ca", "ca", "ny", "ny"],
+        "time_value": dates.tolist() + dates.tolist(),
+        "version": [version] * 4,
+        "value": [10.0, 20.0, 30.0, 40.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    df2 = pd.DataFrame({
+        "geo_value": ["ca", "ca", "ny", "ny"],
+        "time_value": dates.tolist() + dates.tolist(),
+        "version": [version] * 4,
+        "value": [11.0, 21.0, 31.0, 41.0],  # All +1 difference
+    }).set_index(["version", "geo_value", "time_value"])
+
+    # Test by="version" - should aggregate across geos
+    stats_version = df1.epi_arch.compare_archive(df2, value_col="value", by="version")
+    assert len(stats_version) == 1
+    assert stats_version.iloc[0]["n_obs"] == 4
+    assert stats_version.iloc[0]["diff_mean"] == -1.0  # All diffs are -1
+
+    # Test by="both" - should have both levels
+    stats_both = df1.epi_arch.compare_archive(df2, value_col="value", by="both")
+    geo_rows = stats_both[stats_both["geo_value"] != "_all_"]
+    all_rows = stats_both[stats_both["geo_value"] == "_all_"]
+    assert len(geo_rows) == 2  # ca and ny
+    assert len(all_rows) == 1  # aggregate
+    assert all_rows.iloc[0]["n_obs"] == 4
