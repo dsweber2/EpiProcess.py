@@ -30,6 +30,7 @@ We hope that the Python version can be much simpler due to Pandas' better suppor
     - [x] `as_epi_arch` constructor.
     - [x] `as_of` and `as_of_current`.
     - [x] `slide` rolling functions.
+    - [x] `epix_slide` per-version windowed slide.
     - [x] Diff-based compression (`compress`).
     - [x] `merge_archive` merge two `epi_arch` objects with LOCF sync.
     - [x] `compare_archive` compare two archives and compute difference statistics.

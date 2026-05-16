@@ -54,6 +54,18 @@ class EpiSnapAccessor:
         obj.attrs["as_of"] = as_of
         return obj
 
+    def _rolling(self, window_size: int | pd.Timedelta):
+        """Build a grouped rolling object that handles both int- and Timedelta-windows.
+
+        For Timedelta windows, pandas requires the time column to be a regular
+        column (not just an index level) and passed via `on=`. For int windows,
+        the index-level form is fine and roughly twice as fast.
+        """
+        if isinstance(window_size, pd.Timedelta):
+            df = self._obj.reset_index("time_value")
+            return df.groupby(self.keys()).rolling(window=window_size, on="time_value", min_periods=1)
+        return self.group().rolling(window=window_size, min_periods=1)
+
     def slide(self, func: Callable, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Apply a function to a rolling window.
 
@@ -64,58 +76,56 @@ class EpiSnapAccessor:
         - Shortens the window on the left boundary.
         - Window's right edge is at the current time.
         """
-        result = self.group().rolling(window=window_size, min_periods=1).apply(func)
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).apply(func), window_size)
 
     def slide_mean(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling mean within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).mean()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).mean(), window_size)
 
     def slide_sum(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling sum within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).sum()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).sum(), window_size)
 
     def slide_std(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling standard deviation within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).std()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).std(), window_size)
 
     def slide_var(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling variance within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).var()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).var(), window_size)
 
     def slide_min(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling minimum within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).min()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).min(), window_size)
 
     def slide_max(self, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling maximum within each group."""
-        result = self.group().rolling(window=window_size, min_periods=1).max()
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(self._rolling(window_size).max(), window_size)
 
-    def _fix_grouped_rolling_result(self, result: pd.DataFrame) -> pd.DataFrame:
-        """Fix the index structure after grouped rolling operations."""
-        # Grouped rolling operations create extra index levels, we need to remove them
-        # to match the original DataFrame structure
-        if len(result.index.names) > len(self._obj.index.names):
-            # Drop the duplicated group levels
-            levels_to_drop = len(result.index.names) - len(self._obj.index.names)
-            result = result.droplevel(list(range(levels_to_drop)))
+    def _fix_grouped_rolling_result(
+        self, result: pd.DataFrame, window_size: int | pd.Timedelta
+    ) -> pd.DataFrame:
+        """Restore the original (geo_value, ..., time_value) MultiIndex."""
+        # Grouped rolling duplicates the group key levels in the output; drop those.
+        n_dupes = len(result.index.names) - len(self._obj.index.names)
+        if isinstance(window_size, pd.Timedelta):
+            # Time-based path: time_value sits in a column, not the index.
+            n_dupes += 1
+        if n_dupes > 0:
+            result = result.droplevel(list(range(n_dupes)))
+        if isinstance(window_size, pd.Timedelta):
+            result = result.set_index("time_value", append=True)
         return result
 
     def complete(self) -> pd.DataFrame:
         """Create a complete index with all group_keys and time_values."""
-        min_t = min(self._obj.index.get_level_values("time_value"))
-        max_t = max(self._obj.index.get_level_values("time_value"))
-        unique_time_values = pd.date_range(min_t, max_t, freq="D")
-        unique_geo_values = self._obj.index.get_level_values("geo_value").unique()
+        time_vals = self._obj.index.get_level_values("time_value")
+        unique_time_values = pd.date_range(time_vals.min(), time_vals.max(), freq="D")
+        key_names = self.keys()  # all non-time index levels
+        level_values = [self._obj.index.get_level_values(k).unique() for k in key_names]
         new_index = pd.MultiIndex.from_product(
-            [unique_geo_values, unique_time_values],
-            names=["geo_value", "time_value"],
+            [*level_values, unique_time_values],
+            names=[*key_names, "time_value"],
         )
         return self._obj.reindex(new_index)
 
@@ -156,7 +166,7 @@ class EpiSnapAccessor:
         if columns is None:
             columns = self._obj.columns.tolist()
         result = self.group()[columns].rolling(window=window_size, min_periods=1).mean().pct_change(periods=1)
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(result, window_size)
 
     def correlation(self, col1: str, col2: str, window_size: int | pd.Timedelta) -> pd.DataFrame:
         """Calculate rolling correlation between two columns within each group."""
@@ -165,7 +175,7 @@ class EpiSnapAccessor:
             return x[col1].corr(x[col2])
 
         result = self.group().rolling(window=window_size, min_periods=1).apply(corr_func)
-        return self._fix_grouped_rolling_result(result)
+        return self._fix_grouped_rolling_result(result, window_size)
 
     def detect_outliers(self, column: str, z_thresh: float = 3.0) -> pd.DataFrame:
         """Detect outliers in a specified column using Z-score method within each group."""
@@ -362,21 +372,86 @@ class EpiArchiveAccessor:
         """
         return (self.as_of(v) for v in versions)
 
-    @staticmethod
-    def _locf_across_versions(df: pd.DataFrame) -> pd.DataFrame:
-        """Apply LOCF within each (geo_value, time_value) group, across versions.
+    def _snapshot_at(self, version: pd.Timestamp) -> pd.DataFrame:
+        """True snapshot: latest update per (geo, ..., time) with version <= version.
 
-        This is the correct LOCF behavior for archives: for a fixed (geo, time) pair,
-        carry forward values across versions when observations are missing.
+        Distinct from `as_of`, which returns the filtered archive (still with the
+        version axis). This collapses to one row per non-version key.
         """
-        if df.empty:
-            return df
-        df_reset = df.reset_index()
-        df_sorted = df_reset.sort_values(["geo_value", "time_value", "version"])
-        index_cols = ["version", "geo_value", "time_value"]
-        value_cols = [c for c in df_sorted.columns if c not in index_cols]
-        df_sorted[value_cols] = df_sorted.groupby(["geo_value", "time_value"])[value_cols].ffill()
-        return df_sorted.set_index(index_cols).sort_index()
+        sub = self._obj.loc[self._obj.index.get_level_values("version") <= version]
+        if sub.empty:
+            return sub.copy()
+        ekt_cols = [c for c in sub.index.names if c != "version"]
+        return (
+            sub.reset_index()
+            .sort_values("version")
+            .drop_duplicates(ekt_cols, keep="last")
+            .set_index(ekt_cols)
+            .drop(columns="version")
+            .sort_index()
+        )
+
+    def epix_slide(
+        self,
+        func: Callable[[pd.DataFrame], object],
+        before: pd.Timedelta = pd.Timedelta.max,
+        versions: list[pd.Timestamp] | None = None,
+        new_col_name: str = "slide_value",
+    ) -> pd.DataFrame:
+        """For each version v, apply `func` to the (time-windowed) snapshot at v.
+
+        Port of R `epix_slide`. For each version v:
+          1. Take the snapshot as-of v (latest update per non-version key with
+             version <= v).
+          2. Filter to rows where `time_value >= v - before` (defaults to all).
+          3. Group by all non-time keys and apply `func` to each group.
+
+        Returns a long-form DataFrame with columns `[*keys, version, <new_col_name>]`.
+        """
+        index_cols = list(self._obj.index.names)
+        ekt_cols = [c for c in index_cols if c != "version"]
+        group_cols = [c for c in ekt_cols if c != "time_value"]
+
+        if versions is None:
+            versions = sorted(self._obj.index.get_level_values("version").unique())
+
+        rows = []
+        for v in versions:
+            snap = self._snapshot_at(v)
+            if snap.empty:
+                continue
+            time_vals = snap.index.get_level_values("time_value")
+            try:
+                snap = snap.loc[time_vals >= v - before]
+            except OverflowError:
+                pass  # `before = Timedelta.max` triggers overflow; means "no filter."
+            if snap.empty:
+                continue
+            for group_vals, grp in snap.reset_index().groupby(group_cols):
+                row = dict(zip(group_cols, group_vals if isinstance(group_vals, tuple) else (group_vals,)))
+                row["version"] = v
+                row[new_col_name] = func(grp)
+                rows.append(row)
+        return pd.DataFrame(rows, columns=[*group_cols, "version", new_col_name])
+
+    @staticmethod
+    def _locf_to_index(orig: pd.DataFrame, target_index: pd.MultiIndex) -> pd.DataFrame:
+        """For each row in `target_index`, return the most recent observation
+        from `orig` whose version is <= that row's version (matching on the
+        non-version key columns).
+
+        Unlike pandas `ffill`, `merge_asof` picks up the exact prior row — so
+        an explicit NA observation propagates forward as NA until a new update
+        replaces it. This matches R epiprocess's per-(geo, time) LOCF semantics.
+        """
+        index_cols = list(target_index.names)
+        ekt_cols = [c for c in index_cols if c != "version"]
+        if orig.empty:
+            return pd.DataFrame(index=target_index, columns=orig.columns)
+        target = target_index.to_frame(index=False).sort_values("version")
+        right = orig.reset_index().sort_values("version")
+        joined = pd.merge_asof(target, right, on="version", by=ekt_cols, direction="backward")
+        return joined.set_index(index_cols).sort_index()
 
     def merge_archive(self, other: pd.DataFrame, sync: Literal["locf", "na", "truncate"] = "locf") -> pd.DataFrame:
         """Combine two epi_arch dataframes.
@@ -388,10 +463,13 @@ class EpiArchiveAccessor:
         other : pd.DataFrame
             Another epi_archive DataFrame to merge with.
         sync : Literal["locf", "na", "truncate"]
-            How to handle version misalignment:
-            - "locf" (default): Carry forward last observation for missing versions
-            - "na": Fill missing versions with NA
-            - "truncate": Keep only versions present in both archives
+            How to handle a `versions_end` mismatch (when one archive saw later
+            updates than the other):
+            - "locf" (default): LOCF both sides up to `max(versions_end)`.
+            - "na": Like "locf", but the lagging side gets a synthetic NA-update
+              version inserted at its old `versions_end + 1 day`, so its values
+              after that point are explicitly NA rather than LOCF'd.
+            - "truncate": Cap the merged archive at `min(versions_end)`.
 
         Returns
         -------
@@ -400,22 +478,27 @@ class EpiArchiveAccessor:
             if there are overlapping column names).
         """
         other = other.epi_arch.as_epi_arch()
-        combined_index = self._obj.index.union(other.index)
-        df1_reindexed = self._obj.reindex(combined_index)
-        df2_reindexed = other.reindex(combined_index)
+        x_end = self._obj.attrs.get("versions_end", self._obj.index.get_level_values("version").max())
+        y_end = other.attrs.get("versions_end", other.index.get_level_values("version").max())
 
-        if sync == "locf":
-            df1_filled = self._locf_across_versions(df1_reindexed)
-            df2_filled = self._locf_across_versions(df2_reindexed)
-        elif sync == "na":
-            df1_filled, df2_filled = df1_reindexed, df2_reindexed
-        elif sync == "truncate":
-            common_versions = set(self._obj.index.get_level_values("version")).intersection(
-                set(other.index.get_level_values("version"))
-            )
-            mask = combined_index.get_level_values("version").isin(common_versions)
-            df1_filled = df1_reindexed.loc[mask]
-            df2_filled = df2_reindexed.loc[mask]
+        x_obj, y_obj = self._obj, other
+        if sync == "na":
+            # Insert synthetic NA-update on the lagging side so values past its
+            # known horizon read as explicit NA rather than LOCF'd.
+            merged_end = max(x_end, y_end)
+            if x_end < merged_end:
+                x_obj = x_obj.epi_arch.fill_through_versions(merged_end, how="na")
+            if y_end < merged_end:
+                y_obj = y_obj.epi_arch.fill_through_versions(merged_end, how="na")
+
+        combined_index = x_obj.index.union(y_obj.index)
+        if sync == "truncate":
+            cap = min(x_end, y_end)
+            combined_index = combined_index[combined_index.get_level_values("version") <= cap]
+
+        if sync in ("locf", "na", "truncate"):
+            df1_filled = self._locf_to_index(x_obj, combined_index)
+            df2_filled = self._locf_to_index(y_obj, combined_index)
         else:
             raise ValueError(f"Unknown sync option: {sync}")
 

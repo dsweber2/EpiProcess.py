@@ -639,11 +639,11 @@ def test_merge_archive_sync_options():
     assert v1_na["value_x"] == 10
     assert pd.isna(v1_na["value_y"])  # No LOCF, stays NA
 
-    # Test "truncate" sync - should only keep common versions
+    # Test "truncate" sync - caps the merged archive at min(versions_end).
+    # df1 and df2 both have versions_end=2024-08-02, so all updates ≤ that are kept.
     merged_trunc = df1.epi_arch.merge_archive(df2, sync="truncate")
-    assert len(merged_trunc) == 1  # Only V2 is common
-    assert pd.Timestamp("2024-08-02") in merged_trunc.index.get_level_values("version")
-    assert pd.Timestamp("2024-08-01") not in merged_trunc.index.get_level_values("version")
+    versions_kept = set(merged_trunc.index.get_level_values("version"))
+    assert versions_kept == {pd.Timestamp("2024-08-01"), pd.Timestamp("2024-08-02")}
 
 
 def test_compare_archive_stats():
@@ -708,6 +708,146 @@ def test_compare_archive_by_options():
     assert len(geo_rows) == 2  # ca and ny
     assert len(all_rows) == 1  # aggregate
     assert all_rows.iloc[0]["n_obs"] == 4
+
+
+# --- epi_snap.slide windowing semantics ---
+# Ported from R epiprocess/tests/testthat/test-epi_slide.R (stripping the
+# tidyeval DSL surface). See CONTEXT.md "Tests 1-8".
+
+
+def test_slide_independent_per_geo_with_offset_time_index():
+    """1. Two geos sharing a time index plus a third with offset dates;
+    each geo's window is computed independently."""
+    dates_ab = pd.date_range("2024-01-01", periods=5, freq="D")
+    dates_c = pd.date_range("2024-01-04", periods=5, freq="D")
+    df = pd.DataFrame({
+        "geo_value": ["a"] * 5 + ["b"] * 5 + ["c"] * 5,
+        "time_value": list(dates_ab) + list(dates_ab) + list(dates_c),
+        "value": list(range(5)) + list(range(10, 15)) + list(range(100, 105)),
+    })
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=3)
+    # Each geo's last value: a=2+3+4=9, b=12+13+14=39, c=102+103+104=309.
+    assert out.loc[("a", dates_ab[-1]), "value"] == 9.0
+    assert out.loc[("b", dates_ab[-1]), "value"] == 39.0
+    assert out.loc[("c", dates_c[-1]), "value"] == 309.0
+    # c's window at its first time_value only has 1 row (no bleed from a/b).
+    assert out.loc[("c", dates_c[0]), "value"] == 100.0
+
+
+def test_slide_int_window_ignores_calendar_gap():
+    """2a. Integer window counts rows, not calendar days; a gap is invisible."""
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05", "2024-01-06"])
+    df = pd.DataFrame({"geo_value": ["a"] * 5, "time_value": dates, "value": [1.0, 2.0, 3.0, 4.0, 5.0]})
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=3)
+    # At 2024-01-05 the window pulls the prior two ROWS: 2024-01-02 (2) and 2024-01-03 (3).
+    assert out.loc[("a", pd.Timestamp("2024-01-05")), "value"] == 9.0
+    assert out.loc[("a", pd.Timestamp("2024-01-06")), "value"] == 12.0
+
+
+def test_slide_timedelta_window_respects_calendar_gap():
+    """2b. With a Timedelta window, the gap should mean some windows shrink."""
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05", "2024-01-06"])
+    df = pd.DataFrame({"geo_value": ["a"] * 5, "time_value": dates, "value": [1.0, 2.0, 3.0, 4.0, 5.0]})
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=pd.Timedelta("3D"))
+    # At 2024-01-05 the 3-day window covers [01-03, 01-04, 01-05] → only 3 and 4 present → 7.
+    assert out.loc[("a", pd.Timestamp("2024-01-05")), "value"] == 7.0
+
+
+def test_slide_skips_nan_values():
+    """3. Explicit NaN values are skipped (pandas sum default)."""
+    df = pd.DataFrame({
+        "geo_value": ["a"] * 5,
+        "time_value": pd.date_range("2024-01-01", periods=5, freq="D"),
+        "value": [1.0, np.nan, 3.0, 4.0, 5.0],
+    })
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=3)
+    # Window at index 2 (date 01-03): rows [1.0, NaN, 3.0] → 4.0 (NaN skipped).
+    assert out.loc[("a", pd.Timestamp("2024-01-03")), "value"] == 4.0
+    # Window at index 1 (date 01-02): rows [1.0, NaN] → 1.0.
+    assert out.loc[("a", pd.Timestamp("2024-01-02")), "value"] == 1.0
+
+
+def test_slide_extra_keys_do_not_bleed():
+    """4. Groups defined by extra_keys are independent."""
+    df = pd.DataFrame({
+        "geo_value": ["a", "a", "b", "b", "a", "a", "b", "b"],
+        "age_group": ["0-18", "19+", "0-18", "19+"] * 2,
+        "time_value": pd.to_datetime(["2024-01-01"] * 4 + ["2024-01-02"] * 4),
+        "value": [1, 10, 100, 1000, 2, 20, 200, 2000],
+    })
+    out = df.epi_snap.as_epi_snap(extra_keys=["age_group"]).epi_snap.slide_sum(window_size=2)
+    # Each (geo, age) pair sums only its own two rows.
+    assert out.loc[("a", "0-18", pd.Timestamp("2024-01-02")), "value"] == 3.0
+    assert out.loc[("a", "19+", pd.Timestamp("2024-01-02")), "value"] == 30.0
+    assert out.loc[("b", "0-18", pd.Timestamp("2024-01-02")), "value"] == 300.0
+    assert out.loc[("b", "19+", pd.Timestamp("2024-01-02")), "value"] == 3000.0
+
+
+def test_slide_left_boundary_min_periods():
+    """5. Window at the left edge uses available rows (min_periods=1)."""
+    df = pd.DataFrame({
+        "geo_value": ["a"] * 4,
+        "time_value": pd.date_range("2024-01-01", periods=4, freq="D"),
+        "value": [10.0, 20.0, 30.0, 40.0],
+    })
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=7)
+    # First row: only itself; expanding outward as more rows are available.
+    assert out.loc[("a", pd.Timestamp("2024-01-01")), "value"] == 10.0
+    assert out.loc[("a", pd.Timestamp("2024-01-02")), "value"] == 30.0
+    assert out.loc[("a", pd.Timestamp("2024-01-04")), "value"] == 100.0
+
+
+def test_slide_and_slide_sum_agree():
+    """6. Callable-based slide(np.sum, ...) matches slide_sum."""
+    df = pd.DataFrame({
+        "geo_value": ["a"] * 5 + ["b"] * 5,
+        "time_value": list(pd.date_range("2024-01-01", periods=5, freq="D")) * 2,
+        "value": [float(x) for x in range(10)],
+    })
+    snap = df.epi_snap.as_epi_snap()
+    via_callable = snap.epi_snap.slide(np.sum, window_size=3)
+    via_named = snap.epi_snap.slide_sum(window_size=3)
+    pd.testing.assert_frame_equal(via_callable, via_named)
+
+
+def test_slide_single_row_group():
+    """7. A single-row group does not crash and returns the value."""
+    df = pd.DataFrame({
+        "geo_value": ["a"],
+        "time_value": [pd.Timestamp("2024-01-01")],
+        "value": [42.0],
+    })
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=3)
+    assert len(out) == 1
+    assert out.loc[("a", pd.Timestamp("2024-01-01")), "value"] == 42.0
+
+
+def test_slide_all_nan_group():
+    """8. An all-NaN value column yields all-NaN output (not 0)."""
+    df = pd.DataFrame({
+        "geo_value": ["a"] * 3,
+        "time_value": pd.date_range("2024-01-01", periods=3, freq="D"),
+        "value": [np.nan] * 3,
+    })
+    out = df.epi_snap.as_epi_snap().epi_snap.slide_sum(window_size=2)
+    assert out["value"].isna().all()
+
+
+def test_complete_with_extra_keys():
+    """complete() should expand over all key levels, not just (geo, time)."""
+    df = pd.DataFrame({
+        "geo_value": ["a", "b"],
+        "age_group": ["0-18", "19+"],
+        "time_value": pd.to_datetime(["2024-01-01", "2024-01-03"]),
+        "value": [1.0, 2.0],
+    })
+    completed = df.epi_snap.as_epi_snap(extra_keys=["age_group"]).epi_snap.complete()
+    # 2 geos × 2 age_groups × 3 days = 12 rows.
+    assert len(completed) == 12
+    assert completed.index.names == ["geo_value", "age_group", "time_value"]
+    # Original row should retain its value; the rest should be NaN.
+    assert completed.loc[("a", "0-18", pd.Timestamp("2024-01-01")), "value"] == 1.0
+    assert pd.isna(completed.loc[("a", "19+", pd.Timestamp("2024-01-01")), "value"])
 
 
 def _make_arch(rows: list[tuple[str, str, str, float]]) -> pd.DataFrame:
@@ -801,6 +941,240 @@ def test_fill_through_versions_locf():
     filled = arch.epi_arch.fill_through_versions(pd.Timestamp("2024-08-05"), how="locf")
     assert len(filled) == 1  # no rows added
     assert filled.attrs["versions_end"] == pd.Timestamp("2024-08-05")
+
+
+def _arch_from_rows(rows: list[dict], extra_cols: list[str]) -> pd.DataFrame:
+    """Build an epi_arch from a list of dict rows. `extra_cols` lists value cols."""
+    df = pd.DataFrame(rows)
+    df["time_value"] = pd.to_datetime(df["time_value"])
+    df["version"] = pd.to_datetime(df["version"])
+    return df.set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch()
+
+
+def _merged_at(merged: pd.DataFrame, version: str, geo: str, time_value: str) -> pd.Series:
+    return merged.loc[(pd.Timestamp(version), geo, pd.Timestamp(time_value))]
+
+
+def test_merge_archive_locf_scenario_1():
+    """Port of R test-epix_merge.R:67-94. Both signals observed; merged rows
+    appear at every (geo, time, version) seen in either side."""
+    s1 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-01", "signal1": "XA"},
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-02", "signal1": "XB"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-02", "signal1": "XC"},
+    ], ["signal1"])
+    s2 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-03", "signal2": "YA"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-03", "signal2": "YB"},
+    ], ["signal2"])
+    merged = s1.epi_arch.merge_archive(s2, sync="locf")
+
+    assert _merged_at(merged, "2024-08-01", "ca", "2024-08-01")["signal1"] == "XA"
+    assert pd.isna(_merged_at(merged, "2024-08-01", "ca", "2024-08-01")["signal2"])
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal1"] == "XB"
+    assert pd.isna(_merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal2"])
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal1"] == "XB"  # LOCF
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal2"] == "YA"
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-02")["signal1"] == "XC"
+    assert pd.isna(_merged_at(merged, "2024-08-02", "ca", "2024-08-02")["signal2"])
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-02")["signal1"] == "XC"  # LOCF
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-02")["signal2"] == "YB"
+    assert len(merged) == 5
+
+
+def test_merge_archive_locf_scenario_2():
+    """Port of R test-epix_merge.R:96-124."""
+    s1 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-01", "signal1": "XA"},
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-03", "signal1": "XB"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-03", "signal1": "XC"},
+        {"geo_value": "ca", "time_value": "2024-08-03", "version": "2024-08-03", "signal1": "XD"},
+    ], ["signal1"])
+    s2 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-02", "signal2": "YA"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-02", "signal2": "YB"},
+    ], ["signal2"])
+    merged = s1.epi_arch.merge_archive(s2, sync="locf")
+
+    # (time=08-02, v=08-02): signal1 not observed for this (geo, time) until v=08-03
+    assert pd.isna(_merged_at(merged, "2024-08-02", "ca", "2024-08-02")["signal1"])
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-02")["signal2"] == "YB"
+    # (time=08-01, v=08-02): signal1 LOCF=XA, signal2=YA
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal1"] == "XA"
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal2"] == "YA"
+    # (time=08-01, v=08-03): signal1=XB, signal2 LOCF=YA
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal1"] == "XB"
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal2"] == "YA"
+    # (time=08-03, v=08-03): signal1=XD, signal2 never observed at this time → NA
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-03")["signal1"] == "XD"
+    assert pd.isna(_merged_at(merged, "2024-08-03", "ca", "2024-08-03")["signal2"])
+    assert len(merged) == 6
+
+
+def test_merge_archive_locf_scenario_3():
+    """Port of R test-epix_merge.R:126-153."""
+    s1 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-01", "signal1": "XA"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-02", "signal1": "XB"},
+        {"geo_value": "ca", "time_value": "2024-08-03", "version": "2024-08-03", "signal1": "XC"},
+    ], ["signal1"])
+    s2 = _arch_from_rows([
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-02", "signal2": "YA"},
+        {"geo_value": "ca", "time_value": "2024-08-01", "version": "2024-08-03", "signal2": "YB"},
+        {"geo_value": "ca", "time_value": "2024-08-02", "version": "2024-08-03", "signal2": "YC"},
+    ], ["signal2"])
+    merged = s1.epi_arch.merge_archive(s2, sync="locf")
+
+    # signal1 LOCFs forward at each (geo, time)
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal1"] == "XA"  # LOCF
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal1"] == "XA"  # LOCF
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-02")["signal1"] == "XB"  # LOCF
+    # signal2 has two updates for time=08-01 at v=08-02 and v=08-03
+    assert _merged_at(merged, "2024-08-02", "ca", "2024-08-01")["signal2"] == "YA"
+    assert _merged_at(merged, "2024-08-03", "ca", "2024-08-01")["signal2"] == "YB"
+    # (time=08-03, v=08-03): signal2 never observed at this time
+    assert pd.isna(_merged_at(merged, "2024-08-03", "ca", "2024-08-03")["signal2"])
+    assert len(merged) == 6
+
+
+def test_merge_archive_sync_na_inserts_synthetic_na_update():
+    """Port of R test-epix_merge.R:218-230. When y's versions_end is past x's,
+    sync='na' inserts a synthetic NA-update for x at x.versions_end+1 day."""
+    # x has versions_end = test_date + 3
+    x = pd.DataFrame({
+        "geo_value": ["ak"],
+        "time_value": [pd.Timestamp("2024-01-01")],
+        "version": [pd.Timestamp("2024-01-02")],  # test_date + 1
+        "x_value": [10.0],
+    }).set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch(
+        versions_end=pd.Timestamp("2024-01-04")  # test_date + 3
+    )
+    # y has versions_end = test_date + 5
+    y = pd.DataFrame({
+        "geo_value": ["ak"],
+        "time_value": [pd.Timestamp("2024-01-01")],
+        "version": [pd.Timestamp("2024-01-06")],  # test_date + 5
+        "y_value": [20.0],
+    }).set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch()
+
+    merged = x.epi_arch.merge_archive(y, sync="na")
+    key = ("ak", pd.Timestamp("2024-01-01"))
+
+    # v=test_date+1: x updated, y not yet observed
+    assert merged.loc[(pd.Timestamp("2024-01-02"), *key), "x_value"] == 10.0
+    assert pd.isna(merged.loc[(pd.Timestamp("2024-01-02"), *key), "y_value"])
+    # v=test_date+4: synthetic NA-update for x (x's versions_end + 1); y still not observed
+    assert pd.isna(merged.loc[(pd.Timestamp("2024-01-05"), *key), "x_value"])
+    assert pd.isna(merged.loc[(pd.Timestamp("2024-01-05"), *key), "y_value"])
+    # v=test_date+5: x stays NA (LOCF from synthetic), y updated
+    assert pd.isna(merged.loc[(pd.Timestamp("2024-01-06"), *key), "x_value"])
+    assert merged.loc[(pd.Timestamp("2024-01-06"), *key), "y_value"] == 20.0
+    # versions_end is the max
+    assert merged.attrs["versions_end"] == pd.Timestamp("2024-01-06")
+
+
+def test_merge_archive_sync_truncate_caps_at_min_versions_end():
+    """Port of R test-epix_merge.R:241-249. Truncate caps to min(versions_end),
+    which can be different from intersecting observed versions."""
+    x = pd.DataFrame({
+        "geo_value": ["ak"],
+        "time_value": [pd.Timestamp("2024-01-01")],
+        "version": [pd.Timestamp("2024-01-02")],
+        "x_value": [10.0],
+    }).set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch(
+        versions_end=pd.Timestamp("2024-01-04")
+    )
+    y = pd.DataFrame({
+        "geo_value": ["ak"],
+        "time_value": [pd.Timestamp("2024-01-01")],
+        "version": [pd.Timestamp("2024-01-06")],
+        "y_value": [20.0],
+    }).set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch()
+
+    merged = x.epi_arch.merge_archive(y, sync="truncate")
+    # Cap is min(2024-01-04, 2024-01-06) = 2024-01-04. y's v=2024-01-06 update is truncated.
+    versions = set(merged.index.get_level_values("version"))
+    assert versions == {pd.Timestamp("2024-01-02")}
+    assert merged.loc[(pd.Timestamp("2024-01-02"), "ak", pd.Timestamp("2024-01-01")), "x_value"] == 10.0
+    assert pd.isna(merged.loc[(pd.Timestamp("2024-01-02"), "ak", pd.Timestamp("2024-01-01")), "y_value"])
+    assert merged.attrs["versions_end"] == pd.Timestamp("2024-01-04")
+
+
+def test_epix_slide_basic_sum_window():
+    """Port of R test-epix_slide.R:21-72 `xx` test. For each version, sum
+    `binary` over a 2-day-before window of the snapshot."""
+    test_date = pd.Timestamp("2020-01-01")
+    rows = [
+        # (version, time_value, binary) — version v means update observed at day test_date+v
+        *[(4, t, 2 ** b) for t, b in zip([1, 2, 3], [1, 2, 3])],
+        *[(5, t, 2 ** b) for t, b in zip([1, 2, 4], [4, 5, 6])],
+        *[(6, t, 2 ** b) for t, b in zip([1, 2, 4, 5], [7, 8, 9, 10])],
+        *[(7, t, 2 ** b) for t, b in zip([2, 3, 4, 5, 6], [11, 12, 13, 14, 15])],
+    ]
+    df = pd.DataFrame({
+        "geo_value": "ak",
+        "version": [test_date + pd.Timedelta(days=v) for v, _, _ in rows],
+        "time_value": [test_date + pd.Timedelta(days=t) for _, t, _ in rows],
+        "binary": [b for _, _, b in rows],
+    })
+    arch = df.set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch()
+
+    out = arch.epi_arch.epix_slide(
+        func=lambda g: g["binary"].sum(),
+        before=pd.Timedelta(days=2),
+        new_col_name="sum_binary",
+    )
+    expected = pd.DataFrame({
+        "geo_value": ["ak"] * 4,
+        "version": [test_date + pd.Timedelta(days=d) for d in [4, 5, 6, 7]],
+        "sum_binary": [2**3 + 2**2, 2**6 + 2**3, 2**10 + 2**9, 2**15 + 2**14],
+    })
+    pd.testing.assert_frame_equal(out, expected)
+
+
+def test_epix_slide_default_versions_and_before():
+    """Default `before` is all-history; default `versions` is all observed."""
+    test_date = pd.Timestamp("2024-01-01")
+    df = pd.DataFrame({
+        "geo_value": ["ca", "ca"],
+        "version": [test_date, test_date + pd.Timedelta(days=1)],
+        "time_value": [test_date, test_date],
+        "value": [10.0, 20.0],
+    })
+    arch = df.set_index(["version", "geo_value", "time_value"]).epi_arch.as_epi_arch()
+    out = arch.epi_arch.epix_slide(func=lambda g: g["value"].max())
+    # Two versions; snapshot at v1=value 10, at v2=value 20 (overwrite).
+    assert list(out["version"]) == [test_date, test_date + pd.Timedelta(days=1)]
+    assert list(out["slide_value"]) == [10.0, 20.0]
+
+
+def test_merge_archive_propagates_explicit_na_updates():
+    """An explicit NA update should LOCF as NA, not be silently overridden by
+    the prior non-NA value. Ported from R test-epix_merge.R:8-64 ("XE" series)."""
+    x = pd.DataFrame({
+        "geo_value": ["ak", "ak"],
+        "time_value": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+        "version": pd.to_datetime(["2024-01-01", "2024-01-03"]),
+        "x_value": [10.0, np.nan],  # explicit NA observation at v=3
+    }).set_index(["version", "geo_value", "time_value"])
+    y = pd.DataFrame({
+        "geo_value": ["ak"],
+        "time_value": pd.to_datetime(["2024-01-01"]),
+        "version": pd.to_datetime(["2024-01-02"]),
+        "y_value": [100.0],
+    }).set_index(["version", "geo_value", "time_value"])
+
+    merged = x.epi_arch.merge_archive(y, sync="locf")
+
+    v1, v2, v3 = (pd.Timestamp(d) for d in ["2024-01-01", "2024-01-02", "2024-01-03"])
+    key = ("ak", pd.Timestamp("2024-01-01"))
+    assert merged.loc[(v1, *key), "x_value"] == 10.0
+    assert pd.isna(merged.loc[(v1, *key), "y_value"])  # y not observed yet
+    assert merged.loc[(v2, *key), "x_value"] == 10.0  # LOCF from v1
+    assert merged.loc[(v2, *key), "y_value"] == 100.0
+    # The crux: at v3, x had an explicit NA update — must not LOCF the prior 10.0.
+    assert pd.isna(merged.loc[(v3, *key), "x_value"])
+    assert merged.loc[(v3, *key), "y_value"] == 100.0  # LOCF from v2
 
 
 def test_merge_archive_propagates_versions_end():
