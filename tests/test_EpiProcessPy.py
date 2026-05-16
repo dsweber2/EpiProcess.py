@@ -708,3 +708,112 @@ def test_compare_archive_by_options():
     assert len(geo_rows) == 2  # ca and ny
     assert len(all_rows) == 1  # aggregate
     assert all_rows.iloc[0]["n_obs"] == 4
+
+
+def _make_arch(rows: list[tuple[str, str, str, float]]) -> pd.DataFrame:
+    df = pd.DataFrame(rows, columns=["geo_value", "time_value", "version", "value"])
+    df["time_value"] = pd.to_datetime(df["time_value"])
+    df["version"] = pd.to_datetime(df["version"])
+    return df.set_index(["version", "geo_value", "time_value"]).sort_index().epi_arch.as_epi_arch()
+
+
+def test_compress_removes_locf_rows():
+    """A second-version row identical to the first should be dropped."""
+    arch = _make_arch([
+        ("ca", "2024-08-01", "2024-08-01", 10.0),
+        ("ca", "2024-08-01", "2024-08-02", 10.0),  # LOCF, drop
+        ("ca", "2024-08-01", "2024-08-03", 11.0),  # changed, keep
+        ("ca", "2024-08-02", "2024-08-01", 20.0),
+        ("ca", "2024-08-02", "2024-08-02", 20.0),  # LOCF, drop
+    ])
+    compressed = arch.epi_arch.compress()
+    assert len(compressed) == 3
+    # versions_end attr survives
+    assert compressed.attrs["versions_end"] == pd.Timestamp("2024-08-03")
+    # as_of result is unchanged by compression
+    for v in ["2024-08-01", "2024-08-02", "2024-08-03"]:
+        ts = pd.Timestamp(v)
+        # Both should produce the same latest-value picture per (geo, time).
+        orig = arch.epi_arch.as_of(ts).groupby(level=["geo_value", "time_value"]).tail(1)
+        comp = compressed.epi_arch.as_of(ts).groupby(level=["geo_value", "time_value"]).tail(1)
+        pd.testing.assert_frame_equal(
+            orig.droplevel("version").sort_index(),
+            comp.droplevel("version").sort_index(),
+        )
+
+
+def test_compress_abs_tol():
+    """Numeric near-equality within abs_tol is treated as LOCF."""
+    arch = _make_arch([
+        ("ca", "2024-08-01", "2024-08-01", 10.0),
+        ("ca", "2024-08-01", "2024-08-02", 10.05),  # within tol, drop
+        ("ca", "2024-08-01", "2024-08-03", 10.5),   # outside tol, keep
+    ])
+    compressed = arch.epi_arch.compress(abs_tol=0.1)
+    assert len(compressed) == 2
+
+
+def test_compress_na_equality():
+    """NA == NA is treated as LOCF."""
+    arch = _make_arch([
+        ("ca", "2024-08-01", "2024-08-01", float("nan")),
+        ("ca", "2024-08-01", "2024-08-02", float("nan")),  # NA->NA, drop
+        ("ca", "2024-08-01", "2024-08-03", 5.0),
+    ])
+    compressed = arch.epi_arch.compress()
+    assert len(compressed) == 2
+
+
+def test_truncate_versions_after():
+    arch = _make_arch([
+        ("ca", "2024-08-01", "2024-08-01", 10.0),
+        ("ca", "2024-08-01", "2024-08-02", 11.0),
+        ("ca", "2024-08-01", "2024-08-03", 12.0),
+    ])
+    truncated = arch.epi_arch.truncate_versions_after(pd.Timestamp("2024-08-02"))
+    assert len(truncated) == 2
+    assert truncated.attrs["versions_end"] == pd.Timestamp("2024-08-02")
+    assert truncated.index.get_level_values("version").max() == pd.Timestamp("2024-08-02")
+
+
+def test_truncate_versions_after_rejects_future():
+    arch = _make_arch([("ca", "2024-08-01", "2024-08-01", 10.0)])
+    with pytest.raises(ValueError, match="must be at most"):
+        arch.epi_arch.truncate_versions_after(pd.Timestamp("2024-09-01"))
+
+
+def test_fill_through_versions_na():
+    arch = _make_arch([
+        ("ca", "2024-08-01", "2024-08-01", 10.0),
+        ("ny", "2024-08-01", "2024-08-01", 20.0),
+    ])
+    filled = arch.epi_arch.fill_through_versions(pd.Timestamp("2024-08-05"), how="na")
+    # Original 2 rows + 2 synthetic NA rows (one per geo) at next version.
+    assert len(filled) == 4
+    assert filled.attrs["versions_end"] == pd.Timestamp("2024-08-05")
+    next_v = pd.Timestamp("2024-08-02")
+    na_rows = filled.loc[next_v]
+    assert na_rows["value"].isna().all()
+
+
+def test_fill_through_versions_locf():
+    arch = _make_arch([("ca", "2024-08-01", "2024-08-01", 10.0)])
+    filled = arch.epi_arch.fill_through_versions(pd.Timestamp("2024-08-05"), how="locf")
+    assert len(filled) == 1  # no rows added
+    assert filled.attrs["versions_end"] == pd.Timestamp("2024-08-05")
+
+
+def test_merge_archive_propagates_versions_end():
+    a = _make_arch([("ca", "2024-08-01", "2024-08-03", 10.0)])  # versions_end = 08-03
+    b = _make_arch([("ca", "2024-08-01", "2024-08-05", 20.0)])  # versions_end = 08-05
+    assert a.epi_arch.merge_archive(b, sync="locf").attrs["versions_end"] == pd.Timestamp("2024-08-05")
+    assert a.epi_arch.merge_archive(b, sync="na").attrs["versions_end"] == pd.Timestamp("2024-08-05")
+    assert a.epi_arch.merge_archive(b, sync="truncate").attrs["versions_end"] == pd.Timestamp("2024-08-03")
+
+
+def test_fill_through_versions_noop_when_already_at_end():
+    arch = _make_arch([("ca", "2024-08-01", "2024-08-03", 10.0)])
+    # arch's versions_end is 2024-08-03; asking for earlier is a no-op.
+    filled = arch.epi_arch.fill_through_versions(pd.Timestamp("2024-08-02"), how="na")
+    assert len(filled) == 1
+

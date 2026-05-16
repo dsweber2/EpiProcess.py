@@ -207,7 +207,11 @@ class EpiArchiveAccessor:
         if not set(obj.index.names) >= must_contain and not set(obj.columns) >= must_contain:
             raise AttributeError("Must have 'geo_value', 'time_value', and 'version'.")
 
-    def as_epi_arch(self, extra_keys: tuple[str, ...] | list[str] = ()) -> pd.DataFrame:
+    def as_epi_arch(
+        self,
+        extra_keys: tuple[str, ...] | list[str] = (),
+        versions_end: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
         obj = self._obj
         key_names = ["version", "geo_value", *extra_keys, "time_value"]
         # Reset and drop index if not named
@@ -217,6 +221,7 @@ class EpiArchiveAccessor:
             else:
                 drop_index = False
             obj = obj.reset_index(drop=drop_index).set_index(key_names)
+        obj.attrs["versions_end"] = versions_end or obj.index.get_level_values("version").max()
         return obj
 
     def group(self) -> DataFrameGroupBy:
@@ -225,9 +230,122 @@ class EpiArchiveAccessor:
         names_without_time.remove("time_value")
         return self._obj.groupby(names_without_time)
 
-    def compress(self) -> None:
-        """TODO."""
-        ...
+    def compress(self, abs_tol: float = 0.0, init_nas_are_locf: bool = False) -> pd.DataFrame:
+        """Remove rows that are LOCF-redundant given previous versions.
+
+        Port of R `apply_compactify` (epiprocess/R/archive.R). For each
+        `(geo_value, ..., time_value)` series, an update row is removed if every
+        value column is equal (within `abs_tol` for numeric columns; exactly for
+        others, treating NA == NA) to the immediately preceding version's row.
+        First observation per series is always kept.
+
+        Parameters
+        ----------
+        abs_tol : float
+            Absolute tolerance for numeric value-column equality. Default 0.
+        init_nas_are_locf : bool
+            If True, the first row of a series is treated as LOCF when all its
+            value columns are NA. Default False (matches R default).
+        """
+        index_cols = list(self._obj.index.names)
+        ekt_cols = [c for c in index_cols if c != "version"]
+        value_cols = [c for c in self._obj.columns if c not in index_cols]
+
+        df = self._obj.reset_index().sort_values(ekt_cols + ["version"]).reset_index(drop=True)
+
+        def col_is_locf(col: pd.Series, is_key: bool) -> pd.Series:
+            lag = col.shift(1)
+            if not is_key and pd.api.types.is_numeric_dtype(col):
+                both_present = col.notna() & lag.notna()
+                both_na = col.isna() & lag.isna()
+                return (both_present & ((col - lag).abs() <= abs_tol)) | both_na
+            # Exact equality, NA-equal.
+            return (col == lag) | (col.isna() & lag.isna())
+
+        ekt_is_locf = pd.Series(True, index=df.index)
+        for c in ekt_cols:
+            ekt_is_locf &= col_is_locf(df[c], is_key=True)
+
+        value_is_locf = pd.Series(True, index=df.index)
+        for c in value_cols:
+            value_is_locf &= col_is_locf(df[c], is_key=False)
+
+        if init_nas_are_locf and value_cols:
+            all_na = df[value_cols].isna().all(axis=1)
+            is_locf = pd.Series(
+                [(e and v) if e else m for e, v, m in zip(ekt_is_locf, value_is_locf, all_na)],
+                index=df.index,
+            )
+        else:
+            is_locf = ekt_is_locf & value_is_locf
+
+        result = df.loc[~is_locf].set_index(index_cols).sort_index()
+        result.attrs = dict(self._obj.attrs)
+        return result
+
+    def truncate_versions_after(self, max_version: pd.Timestamp) -> pd.DataFrame:
+        """Keep only rows with `version <= max_version`.
+
+        Port of R `epix_truncate_versions_after`. Behaviorally equivalent to
+        `as_of(max_version)` here (we don't carry the `clobberable_versions_start`
+        field separately); kept for naming parity with R and to update
+        `versions_end` in attrs.
+        """
+        versions = self._obj.index.get_level_values("version")
+        if max_version > self._obj.attrs.get("versions_end", versions.max()):
+            raise ValueError("`max_version` must be at most the archive's `versions_end`.")
+        result = self._obj.loc[versions <= max_version].copy()
+        result.attrs = dict(self._obj.attrs)
+        result.attrs["versions_end"] = max_version
+        return result
+
+    def fill_through_versions(
+        self,
+        fill_versions_end: pd.Timestamp,
+        how: Literal["na", "locf"] = "na",
+    ) -> pd.DataFrame:
+        """Extend the archive's `versions_end` forward.
+
+        Port of R `epix_fill_through_version`. If `fill_versions_end` is beyond
+        the current `versions_end`:
+
+        - `"na"`: append one synthetic version (current `versions_end` + 1 day)
+          containing every `(geo_value, ..., time_value)` ever observed, with NA
+          for all value columns.
+        - `"locf"`: no data is added; LOCF is implicit in `as_of` queries.
+
+        Either way, `versions_end` in attrs is bumped to `fill_versions_end`.
+        """
+        current_end = self._obj.attrs.get("versions_end", self._obj.index.get_level_values("version").max())
+        if fill_versions_end <= current_end:
+            return self._obj
+
+        if how == "locf":
+            result = self._obj.copy()
+        elif how == "na":
+            index_cols = list(self._obj.index.names)
+            ekt_cols = [c for c in index_cols if c != "version"]
+            value_cols = [c for c in self._obj.columns if c not in index_cols]
+            ekt_unique = self._obj.reset_index()[ekt_cols].drop_duplicates()
+            # next_after for daily cadence; TODO: respect cadence once implemented.
+            next_version = current_end + pd.Timedelta(days=1)
+            if next_version > fill_versions_end:
+                raise ValueError(
+                    f"Cannot fill: next version {next_version} exceeds fill_versions_end {fill_versions_end}."
+                )
+            ekt_unique["version"] = next_version
+            for c in value_cols:
+                # Use the dtype's own missing sentinel (NaN for float, NaT for datetime, ...).
+                na_val = pd.array([None], dtype=self._obj[c].dtype)[0]
+                ekt_unique[c] = pd.Series([na_val] * len(ekt_unique), dtype=self._obj[c].dtype)
+            new_rows = ekt_unique.set_index(index_cols)
+            result = pd.concat([self._obj, new_rows]).sort_index()
+        else:
+            raise ValueError(f"Unknown how: {how}")
+
+        result.attrs = dict(self._obj.attrs)
+        result.attrs["versions_end"] = fill_versions_end
+        return result
 
     def as_of(self, version: pd.Timestamp) -> pd.DataFrame:
         """Subset the dataframe as of a specific version."""
@@ -305,7 +423,12 @@ class EpiArchiveAccessor:
         if len(common_cols) > 0:
             df1_filled = df1_filled.add_suffix("_x")
             df2_filled = df2_filled.add_suffix("_y")
-        return pd.concat([df1_filled, df2_filled], axis=1)
+        result = pd.concat([df1_filled, df2_filled], axis=1)
+
+        x_end = self._obj.attrs.get("versions_end", self._obj.index.get_level_values("version").max())
+        y_end = other.attrs.get("versions_end", other.index.get_level_values("version").max())
+        result.attrs["versions_end"] = min(x_end, y_end) if sync == "truncate" else max(x_end, y_end)
+        return result
 
     def compare_archive(
         self,

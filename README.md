@@ -30,11 +30,11 @@ We hope that the Python version can be much simpler due to Pandas' better suppor
     - [x] `as_epi_arch` constructor.
     - [x] `as_of` and `as_of_current`.
     - [x] `slide` rolling functions.
-    - [ ] Diff-based compression.
+    - [x] Diff-based compression (`compress`).
     - [x] `merge_archive` merge two `epi_arch` objects with LOCF sync.
     - [x] `compare_archive` compare two archives and compute difference statistics.
-    - [ ] `epix_fill_through_versions` fill archive unobserved history.
-    - [ ] `epix_truncate_versions_after` to keep only older versions.
+    - [x] `fill_through_versions` fill archive unobserved history.
+    - [x] `truncate_versions_after` to keep only older versions.
     - [ ] `revision_history` revision history functions.
     - [ ] `autoplot` plot the dataframe (make a time series plot where each line is a distinct geo, but also we take in a list versions, and we print the snapshots at those versions; see epiprocess-R/R/autoplot.R, autoplot.epi_archive()).
     - [ ] `print` print the dataframe.
