@@ -233,7 +233,7 @@ class EpiArchiveAccessor:
 
     def as_of_current(self) -> pd.DataFrame:
         """Subset the dataframe to the current time value."""
-        return self._obj.loc[self._obj.index.get_level_values("time_value") == pd.Timestamp.now()]
+        return self.as_of(self._obj.index.get_level_values("version").max())
 
     def partition_by_versions(self, versions: list[pd.Timestamp]) -> Iterable[pd.DataFrame]:
         """Get an iterable of snapshots.
