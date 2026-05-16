@@ -119,9 +119,11 @@ class EpiSnapAccessor:
         )
         return self._obj.reindex(new_index)
 
-    def fill(self, value: str, method: Literal["ffill", "bfill"] | None = "ffill") -> pd.DataFrame:
+    def fill(self, value: str, method: Literal["ffill", "bfill"] = "ffill") -> pd.DataFrame:
         """Fill in missing values."""
-        return self._obj.assign(value=self.group()[value].fillna(method=method))
+        grouped = self.group()[value]
+        filled = grouped.ffill() if method == "ffill" else grouped.bfill()
+        return self._obj.assign(value=filled)
 
     def sum_groups(self, key: str) -> pd.DataFrame:
         """Sum over a group index."""
